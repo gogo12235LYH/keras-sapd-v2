@@ -1,0 +1,199 @@
+import config
+import tensorflow as tf
+import tensorflow.keras as keras
+from tensorflow.keras import mixed_precision
+from generators.voc import PascalVocGenerator
+from preprocess.color_aug import VisualEffect
+from preprocess.misc_aug import MiscEffect
+from models import detector
+from tensorflow_addons.optimizers import SGDW, AdamW
+from generators.pipeline import create_pipeline_v2
+from callbacks import create_callbacks
+
+
+def _init():
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
+
+def load_weights(input_model):
+    if config.PRETRAIN == 1:
+        print(f" Imagenet ... OK.")
+
+    elif config.PRETRAIN == 2:
+        print(f" Pretrain weight from {config.PRETRAIN_WEIGHT} ... ", end='')
+        input_model.load_weights(config.PRETRAIN_WEIGHT, by_name=True)
+        print("OK.")
+
+    else:
+        print(" From scratch ... ")
+
+
+def create_generators(
+        batch_size=2,
+        phi=0,
+        path=r'../VOCdevkit/VOC2012+2007',
+        misc_aug=True,
+        visual_aug=True
+):
+    """
+    Create generators for training and validation.
+    Args
+        args: parseargs object containing configuration for generators.
+        preprocess_image: Function that preprocesses an image for the network.
+    """
+    common_args = {
+        'batch_size': batch_size,
+        'phi': phi,
+    }
+
+    misc_effect = MiscEffect() if misc_aug else None
+    visual_effect = VisualEffect() if visual_aug else None
+
+    if config.DB_MODE == 'tf':
+        train_generator_, _ = create_pipeline_v2(
+            phi=phi,
+            mode=config.BACKBONE_TYPE,
+            db=config.DATASET,
+            batch_size=batch_size
+        )
+
+    else:
+        # ToDo: Not fixed yet.
+        train_generator_ = PascalVocGenerator(
+            path,
+            'trainval' if config.MixUp_AUG == 0 else 'trainval_mixup',
+            skip_difficult=True,
+            misc_effect=misc_effect,
+            visual_effect=visual_effect,
+            **common_args
+        )
+
+    test_generator_ = PascalVocGenerator(
+        path,
+        'test',
+        skip_difficult=True,
+        shuffle_groups=False,
+        **common_args
+    )
+
+    return train_generator_, test_generator_
+
+
+def create_optimizer(opt_name, base_lr, m, decay):
+    if opt_name == 'SGD':
+        return keras.optimizers.SGD(
+            learning_rate=base_lr,
+            momentum=m,
+            decay=decay,
+            nesterov=config.USE_NESTEROV
+        )
+
+    if opt_name == 'Adam':
+        return keras.optimizers.Adam(
+            learning_rate=base_lr
+        )
+
+    if opt_name == 'SGDW':
+        return SGDW(
+            learning_rate=base_lr,
+            weight_decay=decay,
+            momentum=m,
+            nesterov=config.USE_NESTEROV
+        )
+
+    if opt_name == 'AdamW':
+        opt = AdamW(
+            learning_rate=base_lr,
+            weight_decay=decay
+        )
+        return opt
+
+    raise ValueError("[INFO] Got WRONG Optimizer name. PLZ CHECK again !!")
+
+
+def model_compile(info, optimizer):
+    print(f"{info} Creating Model... ")
+    model_, infer_ = detector(
+        num_cls=config.NUM_CLS,
+        depth=config.SUBNET_DEPTH,
+    )
+
+    print(f"{info} Loading Weight... ", end='')
+    load_weights(input_model=model_)
+
+    print(f"{info} Model Compiling... ")
+    model_.compile(optimizer=optimizer)
+    return model_, infer_
+
+
+def main():
+    print("[INFO] Initializing... ")
+    _init()
+
+    if config.MIXED_PRECISION:
+        print("[INFO] Using Mixed Precision... ")
+        policy = mixed_precision.Policy('mixed_float16')
+        mixed_precision.set_global_policy(policy)
+
+    stage = f"[INFO] Stage 1 :"
+
+    """ Optimizer Setup """
+    print(f"{stage} Creating Optimizer... ")
+    Optimizer = create_optimizer(
+        opt_name=config.OPTIMIZER,
+        base_lr=config.BASE_LR,
+        m=config.MOMENTUM,
+        decay=config.DECAY
+    )
+
+    print(f"{stage} Creating Generators... ")
+    train_generator, test_generator = create_generators(
+        batch_size=config.BATCH_SIZE,
+        phi=config.PHI,
+        misc_aug=config.MISC_AUG,
+        visual_aug=config.VISUAL_AUG,
+        path=config.DATABASE_PATH,
+    )
+
+    """ Multi GPU Accelerating"""
+    if config.MULTI_GPU:
+        # For Linux
+        # mirrored_strategy = tf.distribute.MirroredStrategy()
+
+        # For Windows
+        mirrored_strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.HierarchicalCopyAllReduce())
+
+        with mirrored_strategy.scope():
+            model, pred_model = model_compile(stage, Optimizer)
+    else:
+        model, pred_model = model_compile(stage, Optimizer)
+
+    print(f"{stage} Model Name : {config.NAME}")
+
+    print(f"{stage} Creating Callbacks... ", end='')
+    callbacks = create_callbacks(
+        config=config,
+        pred_mod=pred_model,
+        test_gen=test_generator,
+    )
+
+    """ Training, the batch size of generator is global batch size. """
+    """ Ex: If global batch size and GPUs are 32 and 4, it is 8 (32/4) images per GPU during training. """
+    print(f"{stage} Start Training... ")
+    model.fit(
+        train_generator,
+        epochs=config.EPOCHs,
+        callbacks=callbacks,
+        steps_per_epoch=config.STEPs_PER_EPOCH,
+    )
+
+    """ Save model's weights """
+    save_model_name = config.NAME
+    print(f"{stage} Saving Model Weights : {save_model_name}.h5 ... ")
+    model.save_weights(f'{save_model_name}.h5')
+
+
+if __name__ == '__main__':
+    main()
