@@ -41,6 +41,7 @@ DECAY = 1e-5
 """ Callback Setting """
 LR_Scheduler = 1        # 1 for Cosine Decay, 2 for Cosine Decay with Restart
 USING_HISTORY = 1       # IF Optimizer has weight decay and weight decay can be decayed, must set to be 1 or 2.
+EARLY_STOPPING = 0
 EVALUATION = 1          # AP.5, Return training and Inference model when creating model function is called.
 TENSORBOARD = 0
 

@@ -76,17 +76,18 @@ def create_callbacks(
             )
         )
 
-    # Early stopping.
-    cbs.append(
-        keras.callbacks.EarlyStopping(
-            monitor='loss',
-            mode='min',
-            patience=3,
-            restore_best_weights=True,
-            verbose=1,
+    if config.EARLY_STOPPING:
+        # Early stopping.
+        cbs.append(
+            keras.callbacks.EarlyStopping(
+                monitor='loss',
+                mode='min',
+                patience=3,
+                restore_best_weights=True,
+                verbose=1,
+            )
         )
-    )
-    print(info_ + 'EarlyStopping')
+        print(info_ + 'EarlyStopping')
     return cbs
 
 
