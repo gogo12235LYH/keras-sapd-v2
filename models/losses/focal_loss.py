@@ -29,7 +29,7 @@ def compute_focal(alpha=0.25, gamma=2.0, cutoff=0.0):
     return focal_
 
 
-def compute_focal_v2(alpha=0.25, gamma=2.0, cutoff=0.0):
+def compute_focal_v2(alpha=0.25, gamma=2.0, cutoff=0.1):
     @tf.function(jit_compile=True)
     def focal_(y_true, y_pred):
         """
@@ -86,7 +86,7 @@ def focal_mask(alpha=0.25, gamma=2.0, cutoff=0.0):
     return focal_mask_
 
 
-def focal_mask_v2(alpha=0.25, gamma=2.0, cutoff=0.0):
+def focal_mask_v2(alpha=0.25, gamma=2.0, cutoff=0.1):
     @tf.function(jit_compile=True)
     def focal_mask_(inputs):
         """

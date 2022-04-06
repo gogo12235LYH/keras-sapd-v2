@@ -6,6 +6,7 @@ from utils.util_graph import shrink_and_normalize_boxes, create_reg_positive_sam
 
 _image_size = [512, 640, 768, 896, 1024, 1280, 1408]
 _STRIDES = [8, 16, 32, 64, 128]
+_ALPHA = 0.0
 
 
 def _normalization_image(image, mode):
@@ -478,12 +479,16 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
             )
 
             """ Classification Target: create positive sample """
-            _cls_target = tf.zeros((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, num_cls), dtype=tf.float32)
-            _cls_onehot = tf.ones((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, 1), dtype=tf.float32)
+            _cls_target = tf.zeros((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, num_cls), dtype=tf.float32) + (
+                        _ALPHA / config.NUM_CLS)
+            _cls_onehot = tf.ones((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, 1), dtype=tf.float32) * (1 - _ALPHA)
             _cls_target = tf.concat((_cls_target[..., :cls], _cls_onehot, _cls_target[..., cls + 1:]), axis=-1)
 
             """ Padding Classification Target's negative sample """
-            _cls_target = tf.pad(_cls_target, tf.concat((neg_pad, tf.constant([[0, 0]])), axis=0))
+            _cls_target = tf.pad(
+                _cls_target,
+                tf.concat((neg_pad, tf.constant([[0, 0]])), axis=0),
+            )
 
             """ Padding Soft Anchor's negative sample """
             _ap_weight = tf.pad(_ap_weight, neg_pad, constant_values=1)

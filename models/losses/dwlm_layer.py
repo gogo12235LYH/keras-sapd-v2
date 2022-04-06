@@ -115,7 +115,7 @@ def _map_fn_fmn(total_loss, mask, ind, bbox_cnt):
 
 
 @tf.function
-def _test_bench(total_loss, mask, ind, bbox_cnt, top_k=3):
+def _test_bench(total_loss, mask, ind, bbox_cnt, top_k=1):
     # take first batch
     _batch_ind = tf.cast(ind, tf.int32)[0]
     _batch_bbox_cnt = tf.cast(bbox_cnt, tf.int32)[0]
@@ -147,6 +147,7 @@ def _test_bench(total_loss, mask, ind, bbox_cnt, top_k=3):
         object_l_min = tf.reduce_min(object_ll_mean)
 
         object_target = 1 - (object_ll_mean - object_l_min) / (object_l_max - object_l_min)
+        # object_target = tf.nn.softmax(object_target * 10)
 
         min_weight = tf.nn.top_k(object_target, k=(top_k + 1))[0][..., -1]
 
@@ -195,9 +196,11 @@ class DWLMLayer(keras.layers.Layer):
         # test_tar = _test_bench((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
 
         out_masked = tf.where(tf.greater(cls_tar[..., -1], 0.), fmn_tar, 1.)
+        # cls_loss = tf.where(tf.greater(cls_tar[..., -1], 0.), cls_loss, 1.)
+        # loc_loss = tf.where(tf.greater(cls_tar[..., -1], 0.), loc_loss, 1.)
 
         return tf.expand_dims(out_masked, axis=-1)
-        # return tf.expand_dims(out_masked, axis=-1), tf.expand_dims(test_tar, axis=-1)
+        # return tf.expand_dims(out_masked, axis=-1), tf.expand_dims(test_tar, axis=-1), cls_loss, loc_loss
 
     def get_config(self):
         cfg = super(DWLMLayer, self).get_config()
@@ -238,12 +241,15 @@ if __name__ == '__main__':
 
     """ """
 
-    _dm_out, _dm_out_test = DWLMLayer()(
+    _dm_out, _dm_out_test, _cls_loss, _loc_loss = DWLMLayer()(
         [_cls_pred, _loc_pred, _cls_tar, _loc_tar, _ind_tar, _int_tar]
     )
 
     _dm_out = _dm_out.numpy()
     _dm_out_test = _dm_out_test.numpy()
+
+    _cls_loss = _cls_loss.numpy()
+    _loc_loss = _loc_loss.numpy()
 
     p7_sap = np.reshape(_cls_tar[0, 8500:, -2], (5, 5))
     p6_sap = np.reshape(_cls_tar[0, 8400:8500, -2], (10, 10))

@@ -22,15 +22,16 @@ class StandardHead(keras.layers.Layer):
         }
 
         self.cls_blocks = keras.Sequential()
-        for _ in range(self.depth):
-            self.cls_blocks.add(keras.layers.Conv2D(**_conv2d_setting, groups=16))
-            if gn:
-                self.cls_blocks.add(GroupNormalization(groups=16))
-            self.cls_blocks.add(keras.layers.ReLU())
-
         self.reg_blocks = keras.Sequential()
+
         for _ in range(self.depth):
+            self.cls_blocks.add(keras.layers.Conv2D(**_conv2d_setting))
             self.reg_blocks.add(keras.layers.Conv2D(**_conv2d_setting))
+
+            if gn:
+                self.cls_blocks.add(GroupNormalization(groups=32))
+
+            self.cls_blocks.add(keras.layers.ReLU())
             self.reg_blocks.add(keras.layers.ReLU())
 
         self.cls_conv2d = keras.layers.Conv2D(

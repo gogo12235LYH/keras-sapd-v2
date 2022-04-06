@@ -71,8 +71,7 @@ PRETRAIN_WEIGHT = './20220318-DPCB100-HS016FV3-AdamWE50BS2B1R50D4.h5'
 
 """ Head: Subnetwork """
 SHRINK_RATIO = .2      # Bounding Box shrunk ratio
-HEAD = 'Std'          # 'Std', 'Mix'
-HEAD_WS = 0             # '1' with WS, '0' without WS
+HEAD = 'MP'          # 'Std', 'Mix', 'MP'
 HEAD_GROUPS = 16        # In GroupNormalization's setting
 SUBNET_DEPTH = 4        # Depth of Head Subnetworks
 

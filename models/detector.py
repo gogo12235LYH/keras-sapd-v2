@@ -45,6 +45,11 @@ def _build_head_subnets(input_features, width, depth, num_cls):
         head = Subnetworks(width, depth, num_cls)
         cls_pred, reg_pred = head(input_features)
 
+    elif config.HEAD == 'MP':
+        from models.head.mp_filter import Subnetworks
+        head = Subnetworks(width, depth, num_cls)
+        cls_pred, reg_pred = head(input_features)
+
     return cls_pred, reg_pred
 
 
