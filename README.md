@@ -15,6 +15,7 @@ _* 歡迎指點另一貢獻 [PCB Defect Detection Based on SAPD with Mix Subnetw
 ## Updates
 
 1. 2020-04-06 -> First Commit.
+2. 2020-04-09 -> DWLM w/ MF on 100 eps.
 
 ## ToDo
 
@@ -82,18 +83,22 @@ _待..._
 * 3DMF: 3DMaxFilter ( Three Level Pooling ) 參考 5.1
 
 ### 3.1 Deep PCB:
-
-* 訓練及評估影像大小: 640 * 640 ( PHI=1 )
-* 在 50 epochs 下，原始 SAPD 訓練時間約為 1.9 小時; DWLM 約為 1.1小時，供參考(RTX 3060 6g)。
+* 訓練及評估影像大小: 640 * 640 ( PHI=1 )，就那個黑白的 PCB 瑕疵資料集
+* 在 50 epochs 下，原始 SAPD 訓練時間約為 1.9 小時; DWLM 約為 1.1小時，供參考(RTX 3060 6g)
 
 | subnetworks  | backbone | setting    | mAP    | AP.5   | AP.75  | AP.9   |
 |--------------|----------|------------|--------|--------|--------|--------|
 | SAPD - org   | R50      | 50 epochs  | 0.7530 | 0.9751 | 0.8881 | 0.3518 |
 | DWLM         | R50      | 50 epochs  | 0.7643 | 0.9866 | 0.9122 | 0.3881 |
 | DWLM w/ MF   | R50      | 50 epochs  | 0.7684 | 0.9886 | 0.9150 | 0.3803 |
-| DWLM w/ MF   | R50      | 100 epochs | -      | -      | -      | -      |
+| DWLM w/ MF   | R50      | 100 epochs | 0.7853 | 0.9878 | 0.9440 | 0.4261 |
 | DWLM w/ 3DMF | R50      | 50 epochs  | -      | -      | -      | -      |
 | DWLM w/ 3DMF | R50      | 100 epochs | 0.7828 | 0.9853 | 0.9373 | 0.4115 |
+
+* PCB-Defects 資料集，本貢獻不使用，此資料集建立在人工瑕疵，模型訓練到後期會記住人工修改的特徵。
+
+### 3.2 VOC 2007 + 2012
+
 
 _待..._
 

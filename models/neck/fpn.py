@@ -1,7 +1,5 @@
 import tensorflow as tf
 import tensorflow.keras as keras
-from tensorflow_addons.layers import GroupNormalization
-from models import layers
 
 _k_init = tf.initializers.RandomNormal(0.0, 0.01)
 
@@ -76,12 +74,6 @@ class FeaturePyramidNetwork(keras.layers.Layer):
 
         # down-sampling
         p7 = self.down_conv2d_p7(tf.nn.relu(p6))
-
-        p3 = keras.layers.Activation('linear', dtype='float32')(p3)
-        p4 = keras.layers.Activation('linear', dtype='float32')(p4)
-        p5 = keras.layers.Activation('linear', dtype='float32')(p5)
-        p6 = keras.layers.Activation('linear', dtype='float32')(p6)
-        p7 = keras.layers.Activation('linear', dtype='float32')(p7)
 
         return p3, p4, p5, p6, p7
 

@@ -254,6 +254,11 @@ def preprocess_data(
         #     scale = tf.cast((target_size / image_width), dtype=tf.float32)
         #     resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
         #     resized_width = target_size
+        #
+        # image = tf.image.resize(
+        #     image,
+        #     (resized_height, resized_width),
+        #     method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
         if image_height > target_size or image_width > target_size:
             if image_height > image_width:
@@ -294,10 +299,10 @@ def preprocess_data(
         # gt_boxes_input
         bboxes = tf.stack(
             [
-                bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32) / const,
-                bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32) / const,
-                bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32) / const,
-                bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32) / const,
+                (bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
+                (bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
+                (bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
+                (bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
                 classes
             ],
             axis=-1,
@@ -358,34 +363,39 @@ def preprocess_data_v2(
     def _resize_image(image, target_size=512):
         image_height, image_width = tf.shape(image)[0], tf.shape(image)[1]
 
-        # if image_height > image_width:
-        #     scale = tf.cast((target_size / image_height), dtype=tf.float32)
-        #     resized_height = target_size
-        #     resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-        # else:
-        #     scale = tf.cast((target_size / image_width), dtype=tf.float32)
-        #     resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-        #     resized_width = target_size
+        if image_height > image_width:
+            scale = tf.cast((target_size / image_height), dtype=tf.float32)
+            resized_height = target_size
+            resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
+        else:
+            scale = tf.cast((target_size / image_width), dtype=tf.float32)
+            resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
+            resized_width = target_size
 
-        if image_height > target_size or image_width > target_size:
-            if image_height > image_width:
-                scale = tf.cast((target_size / image_height), dtype=tf.float32)
-                resized_height = target_size
-                resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-            else:
-                scale = tf.cast((target_size / image_width), dtype=tf.float32)
-                resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-                resized_width = target_size
-
-            image = tf.image.resize(
+        image = tf.image.resize(
                 image,
                 (resized_height, resized_width),
                 method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
-        else:
-            resized_height = image_height
-            resized_width = image_width
-            scale = 1.0
+        # if image_height > target_size or image_width > target_size:
+        #     if image_height > image_width:
+        #         scale = tf.cast((target_size / image_height), dtype=tf.float32)
+        #         resized_height = target_size
+        #         resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
+        #     else:
+        #         scale = tf.cast((target_size / image_width), dtype=tf.float32)
+        #         resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
+        #         resized_width = target_size
+        #
+        #     image = tf.image.resize(
+        #         image,
+        #         (resized_height, resized_width),
+        #         method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        #
+        # else:
+        #     resized_height = image_height
+        #     resized_width = image_width
+        #     scale = 1.0
 
         offset_h = (target_size - resized_height) // 2
         offset_w = (target_size - resized_width) // 2
@@ -406,10 +416,10 @@ def preprocess_data_v2(
         # gt_boxes_input
         bboxes = tf.stack(
             [
-                bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32) / const,
-                bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32) / const,
-                bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32) / const,
-                bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32) / const,
+                (bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
+                (bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
+                (bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
+                (bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
                 classes
             ],
             axis=-1,
@@ -480,7 +490,7 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
 
             """ Classification Target: create positive sample """
             _cls_target = tf.zeros((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, num_cls), dtype=tf.float32) + (
-                        _ALPHA / config.NUM_CLS)
+                    _ALPHA / config.NUM_CLS)
             _cls_onehot = tf.ones((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, 1), dtype=tf.float32) * (1 - _ALPHA)
             _cls_target = tf.concat((_cls_target[..., :cls], _cls_onehot, _cls_target[..., cls + 1:]), axis=-1)
 
@@ -604,7 +614,11 @@ def create_pipeline_v2(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=Fa
     autotune = tf.data.AUTOTUNE
 
     if db == "DPCB":
-        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="C:/works/datasets/")
+        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="D:/datasets/")
+
+    elif db == "VOC":
+        (train, test) = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/")
+
     else:
         train = None
         test = None
@@ -617,9 +631,8 @@ def create_pipeline_v2(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=Fa
         fmap_shapes=feature_maps_shapes
     ), num_parallel_calls=autotune)
 
-    train = train.shuffle(train.__len__())
+    train = train.shuffle(1000)
     train = train.map(_compute_targets, num_parallel_calls=autotune)
-    # train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0.0,), drop_remainder=True)
     train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0.0, 0, 0), drop_remainder=True)
     train = train.map(inputs_targets_v2, num_parallel_calls=autotune)
 
@@ -630,11 +643,15 @@ def create_pipeline_v2(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=Fa
     return train, test
 
 
-def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
+def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=False):
     autotune = tf.data.AUTOTUNE
 
     if db == "DPCB":
-        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="C:/works/datasets/")
+        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="D:/datasets/")
+
+    elif db == "VOC":
+        (train, test) = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/")
+
     else:
         train = None
         test = None
@@ -645,11 +662,11 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
         phi=phi,
         mode=mode,
         fmap_shapes=feature_maps_shapes,
-        max_bboxes=16,
-        debug=True
+        max_bboxes=100,
+        debug=debug
     ), num_parallel_calls=autotune)
 
-    train = train.shuffle(train.__len__())
+    train = train.shuffle(1000)
     train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0, 0), drop_remainder=True)
     train = train.map(inputs_targets, num_parallel_calls=autotune)
     train = train.prefetch(autotune)

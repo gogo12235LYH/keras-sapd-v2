@@ -17,18 +17,13 @@ DATABASE_PATH = _dataset_path[DATASET]
 
 """ Hyper-parameter setting """
 DB_MODE = 'tf'          # 'tf' or 'keras', it means that using tf.data or keras.util.sequence.
-EPOCHs = 50
-STEPs_PER_EPOCH = 500  # steps in one epoch
-EPOCHs_STAGE_ONE = int(EPOCHs * 0.5)
-BATCH_SIZE = 2          # Global Batch size
-NUM_CLS = 6
+EPOCHs = 25
+STEPs_PER_EPOCH = 4138  # steps in one epoch, DPCB:1000, VOC:16552
+BATCH_SIZE = 4          # Global Batch size
+NUM_CLS = 20
 PHI = 1                 # B0:(512, 512), B1:(640, 640), B2:(768, 768), B3:(896, 896), B4:(1024, 1024) ~ B7(1048, 1048)
 MULTI_GPU = 0
 MIXED_PRECISION = 1
-EPOCHs_STAGE_TWO = 12
-LRF_MAX_LR = 1e-2
-LRF_MIN_LR = 1e-8
-
 
 """ Optimizer Setting """
 OPTIMIZER = 'AdamW'      # SGDW, AdamW, SGD, Adam
@@ -39,10 +34,10 @@ MOMENTUM = 0.9          # SGDW: (0.9)
 DECAY = 1e-5
 
 """ Callback Setting """
-LR_Scheduler = 1        # 1 for Cosine Decay, 2 for Cosine Decay with Restart
+LR_Scheduler = 2        # 1 for Cosine Decay, 2 for Steps Decay
 USING_HISTORY = 1       # IF Optimizer has weight decay and weight decay can be decayed, must set to be 1 or 2.
 EARLY_STOPPING = 0
-EVALUATION = 1          # AP.5, Return training and Inference model when creating model function is called.
+EVALUATION = 0          # AP.5, Return training and Inference model when creating model function is called.
 TENSORBOARD = 0
 
 """ Warm Up """
@@ -66,13 +61,12 @@ BACKBONE_TYPE = 'ResNetV1'  # ResNetV1, SEResNet
 BACKBONE = 50           # 50 101
 FREEZE_BN = False
 PRETRAIN = 1            # 0 for from scratch, 1 for Imagenet, 2 for the weight's path that you want to load in.
-PRETRAIN_WEIGHT = './20220318-DPCB100-HS016FV3-AdamWE50BS2B1R50D4.h5'
+PRETRAIN_WEIGHT = './xxxx.h5'
 
 
 """ Head: Subnetwork """
 SHRINK_RATIO = .2      # Bounding Box shrunk ratio
-HEAD = 'MP'          # 'Std', 'Mix', 'MP'
-HEAD_GROUPS = 16        # In GroupNormalization's setting
+HEAD = 'Std'          # 'Std', 'Mix', 'MP', '3MP'
 SUBNET_DEPTH = 4        # Depth of Head Subnetworks
 
 
@@ -85,9 +79,9 @@ IOU_FACTOR = 1.0
 
 
 """ Model Name: Date-Dataset-MixUp-HEAD-FSN-Optimizer """
-DATE = '20220325-'
-D_NAME = f'{DATASET}{MISC_AUG}{VISUAL_AUG}{MixUp_AUG}-'
-H_NAME = f'H{HEAD[0]}{HEAD_WS}{HEAD_GROUPS}-'
+DATE = '20220408-'
+D_NAME = f'{DATASET}-'
+H_NAME = f'H{HEAD}-'
 O_NAME = f'{OPTIMIZER}'
 T_NAME = f"E{EPOCHs}BS{BATCH_SIZE}B{PHI}R{BACKBONE}D{SUBNET_DEPTH}"
 NAME = DATE + D_NAME + H_NAME + O_NAME + T_NAME

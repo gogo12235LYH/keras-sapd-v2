@@ -53,7 +53,7 @@ def create_callbacks(
     if config.USING_HISTORY:
         info_ = info_ + "History, "
 
-        _decay_dict = {
+        _cosine_decay_dict = {
             "total_epochs": config.EPOCHs,
             "warm_up": config.USING_WARMUP,
             "warm_up_epochs": config.WP_EPOCHs,
@@ -61,20 +61,42 @@ def create_callbacks(
             "alpha": config.ALPHA,
         }
 
-        cbs.append(
-            History(
-                lr_scheduler=cosine_decay_scheduler(
-                    param="LR",
-                    init_val=config.BASE_LR,
-                    **_decay_dict
-                ),
-                wd_scheduler=cosine_decay_scheduler(
-                    param="WD",
-                    init_val=config.DECAY,
-                    **_decay_dict
+        _steps_decay_dict = {
+            "total_epochs": config.EPOCHs,
+            "warm_up": config.USING_WARMUP,
+            "warm_up_epochs": config.WP_EPOCHs,
+            "warm_up_ratio": config.WP_RATIO
+        }
+
+        if config.LR_Scheduler == 1:
+            cbs.append(
+                History(
+                    lr_scheduler=cosine_decay_scheduler(
+                        param="LR",
+                        init_val=config.BASE_LR,
+                        **_cosine_decay_dict
+                    ),
+                    wd_scheduler=cosine_decay_scheduler(
+                        param="WD",
+                        init_val=config.DECAY,
+                        **_cosine_decay_dict
+                    )
                 )
             )
-        )
+
+        elif config.LR_Scheduler == 2:
+            cbs.append(
+                History(
+                    lr_scheduler=steps_decay_scheduler(
+                        init_val=config.BASE_LR,
+                        **_steps_decay_dict
+                    ),
+                    wd_scheduler=steps_decay_scheduler(
+                        init_val=config.DECAY,
+                        **_steps_decay_dict
+                    )
+                )
+            )
 
     if config.EARLY_STOPPING:
         # Early stopping.
@@ -89,54 +111,6 @@ def create_callbacks(
         )
         print(info_ + 'EarlyStopping')
     return cbs
-
-
-def wd_cosine_decay(epochs, initial_lr=1e-4, warm_up=0, warm_up_epochs=0, warm_up_ratio=0.1, alpha=0.):
-    eps = (epochs - warm_up_epochs) - 1 if warm_up else epochs
-    min_lr = warm_up_ratio * initial_lr
-
-    def warm_up_lr(epoch):
-        decay = min_lr + (initial_lr - min_lr) * (epoch / warm_up_epochs)
-        print(f'-- [INFO] Warmup ({epoch + 1}/{warm_up_epochs}) WD : {decay}')
-        return decay
-
-    def cosine_decay(epoch):
-        ep = (epoch - warm_up_epochs) if warm_up else epoch
-        cosine = 0.5 * (1 + np.cos(np.pi * ep / eps))
-        cosine = (1 - alpha) * cosine + alpha
-        decay = initial_lr * cosine
-        print(f'-- [INFO] Cosine-Decay WD : {decay}')
-        return decay
-
-    def lr_scheduler(epoch):
-        decay = warm_up_lr(epoch) if warm_up and epoch < warm_up_epochs else cosine_decay(epoch)
-        return decay
-
-    return lr_scheduler
-
-
-def lr_cosine_decay(epochs, initial_lr=1e-4, warm_up=0, warm_up_epochs=0, warm_up_ratio=0.1, alpha=0.):
-    eps = (epochs - warm_up_epochs) - 1 if warm_up else epochs
-    min_lr = warm_up_ratio * initial_lr
-
-    def warm_up_lr(epoch):
-        decay = min_lr + (initial_lr - min_lr) * (epoch / warm_up_epochs)
-        print(f'-- [INFO] Warmup ({epoch + 1}/{warm_up_epochs}) LR : {decay}')
-        return decay
-
-    def cosine_decay(epoch):
-        ep = (epoch - warm_up_epochs) if warm_up else epoch
-        cosine = 0.5 * (1 + np.cos(np.pi * ep / eps))
-        cosine = (1 - alpha) * cosine + alpha
-        decay = initial_lr * cosine
-        print(f'-- [INFO] Cosine-Decay LR : {decay}')
-        return decay
-
-    def lr_scheduler(epoch, lr):
-        decay = warm_up_lr(epoch) if warm_up and epoch < warm_up_epochs else cosine_decay(epoch)
-        return decay
-
-    return LearningRateScheduler(lr_scheduler)
 
 
 def cosine_decay_scheduler(
@@ -167,6 +141,52 @@ def cosine_decay_scheduler(
 
     def _output(epoch):
         return _warm_up(epoch) if warm_up and epoch < warm_up_epochs else _cosine_decay(epoch)
+
+    if using_keras:
+        def _scheduler(epoch, lr):
+            return _output(epoch)
+
+        return LearningRateScheduler(_scheduler)
+
+    else:
+        def _scheduler(epoch):
+            return _output(epoch)
+
+        return _scheduler
+
+
+def steps_decay_scheduler(
+        total_epochs=100,
+        init_val=1e-4,
+        warm_up=0,
+        warm_up_epochs=0,
+        warm_up_ratio=0.1,
+        using_keras=0,
+):
+    min_val = warm_up_ratio * init_val
+
+    def _warm_up(current_epoch):
+        decay = min_val + (init_val - min_val) * (current_epoch / warm_up_epochs)
+        print(f'-- [INFO] Warmup ({current_epoch + 1}/{warm_up_epochs}) : {decay}')
+        return decay
+
+    def _steps_decay(current_epoch):
+        decay = init_val
+
+        if (current_epoch / total_epochs) >= .9:
+            decay = init_val * (.5 ** 3)
+
+        elif (current_epoch / total_epochs) >= .75:
+            decay = init_val * (.5 ** 2)
+
+        elif (current_epoch / total_epochs) >= .5:
+            decay = init_val * (.5 ** 1)
+
+        print(f'-- [INFO] Steps-Decay : {decay}')
+        return decay
+
+    def _output(epoch):
+        return _warm_up(epoch) if warm_up and epoch < warm_up_epochs else _steps_decay(epoch)
 
     if using_keras:
         def _scheduler(epoch, lr):
