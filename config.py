@@ -9,11 +9,6 @@ _dataset_path = {
 }
 DATASET = 'DPCB'
 DATABASE_PATH = _dataset_path[DATASET]
-# DATABASE_PATH = r'../VOCdevkit/VOC2012+2007'
-# DATABASE_PATH = r'../PCB_DATASET_Random_Crop'
-# DATABASE_PATH = r'../DeepPCB_voc'
-# DATABASE_PATH = r'../MixPCB'
-# DATABASE_PATH = r'../MixPCB_MixUp_Fix'
 
 """ Hyper-parameter setting """
 DB_MODE = 'tf'          # 'tf' or 'keras', it means that using tf.data or keras.util.sequence.
