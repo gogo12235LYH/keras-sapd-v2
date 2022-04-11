@@ -33,18 +33,18 @@ def _create_detections(fpn_level=5):
             )
         )
 
+    # (fpn_level, anchor-points)
     detections = tf.stack(detections)
     return detections
 
 
 @tf.function
-def _map_fn_fmn(total_loss, mask, ind, bbox_cnt):
+def _map_fn_dwlm(total_loss, mask, ind, bbox_cnt):
     ind = tf.cast(ind, tf.int32)
     bbox_cnt = tf.cast(bbox_cnt, tf.int32)
 
-    detections = _create_detections()
+    detections = _create_detections()  # level_onehot
 
-    @tf.function
     def _compute_target(args):
         # _batch_total_loss: (anchor-points, )
         # _batch_mask: (anchor-points, )
@@ -60,15 +60,13 @@ def _map_fn_fmn(total_loss, mask, ind, bbox_cnt):
         object_ids = tf.range(0, _batch_bbox_cnt, dtype=tf.int32)
         object_ids = tf.reshape(object_ids, [-1, 1])
 
-        @tf.function
         def _build_target(arg):
             object_id = arg
 
             # (anchor-points, )
             object_boolean_mask = tf.where(tf.equal(_batch_ind, object_id[0]), 1., 0.)
 
-            """ """
-            # v3:　(5, anchor-points)
+            # (anchor-points) * (5, anchor-points) ->　(5, anchor-points)
             detections_mask = object_boolean_mask * detections
 
             # (5, anchor-points)
@@ -90,8 +88,10 @@ def _map_fn_fmn(total_loss, mask, ind, bbox_cnt):
                 0.
             )
 
+            # (5, 1) tile(1, 8525) -> (5, 8525) reduce(axis=0) -> (8525, )
             object_target = tf.reduce_sum(
-                (tf.tile(object_target[..., None], (1, 8525)) * detections_mask), axis=0
+                (tf.tile(object_target[..., None], (1, 8525)) * detections_mask),
+                axis=0
             )
             return object_target
 
@@ -192,14 +192,14 @@ class DWLMLayer(keras.layers.Layer):
         cls_loss = self.cls_loss_fn(cls_tar[..., :-2], cls_pred)
         loc_loss = self.loc_loss_fn(loc_tar, loc_pred)
 
-        fmn_tar = _map_fn_fmn((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
-        # test_tar = _test_bench((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
+        dwlm_out = _map_fn_dwlm((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
+        test_tar = _test_bench((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
 
-        out_masked = tf.where(tf.greater(cls_tar[..., -1], 0.), fmn_tar, 1.)
+        dwlm_out_masked = tf.where(tf.greater(cls_tar[..., -1], 0.), dwlm_out, 1.)
         # cls_loss = tf.where(tf.greater(cls_tar[..., -1], 0.), cls_loss, 1.)
         # loc_loss = tf.where(tf.greater(cls_tar[..., -1], 0.), loc_loss, 1.)
 
-        return tf.expand_dims(out_masked, axis=-1)
+        return tf.expand_dims(dwlm_out_masked, axis=-1)
         # return tf.expand_dims(out_masked, axis=-1), tf.expand_dims(test_tar, axis=-1), cls_loss, loc_loss
 
     def get_config(self):
@@ -212,8 +212,7 @@ if __name__ == '__main__':
 
     batch_size = 1
 
-    _fmn_pred = tf.random.uniform((batch_size, 8525, 1))
-    _cls_pred = tf.random.uniform((batch_size, 8525, 6))
+    _cls_pred = tf.random.uniform((batch_size, 8525, config.NUM_CLS))
     _loc_pred = tf.random.uniform((batch_size, 8525, 4))
 
     """ """
@@ -224,7 +223,8 @@ if __name__ == '__main__':
     train_t, test_t = create_pipeline_v2(
         phi=1,
         batch_size=batch_size,
-        debug=True
+        debug=True,
+        db="VOC"
     )
 
     _cls_tar, _loc_tar, _ind_tar, _int_tar = None, None, None, None
