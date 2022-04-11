@@ -90,6 +90,7 @@ def create_reg_positive_sample(bboxes, x1, y1, x2, y2, stride):
 
     reg_target = tf.stack((lef, top, rit, bot), axis=-1) / 4.0 / stride
     anchor_pots = tf.minimum(lef, rit) * tf.minimum(top, bot) / tf.maximum(lef, rit) / tf.maximum(top, bot)
+    anchor_pots += 1e-5
     area = (lef + rit) * (top + bot)
 
     return reg_target, anchor_pots, area

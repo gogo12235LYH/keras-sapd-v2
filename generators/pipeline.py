@@ -9,6 +9,7 @@ _STRIDES = [8, 16, 32, 64, 128]
 _ALPHA = 0.0
 
 
+@tf.function
 def _normalization_image(image, mode):
     if mode == 'ResNetV1':
         # Caffe
@@ -45,9 +46,7 @@ def _fmap_shapes(phi: int = 0, level: int = 5):
 
 
 @tf.function
-def random_flip_horizontal(
-        image, image_shape, bboxes, prob=0.5
-):
+def random_flip_horizontal(image, image_shape, bboxes, prob=0.5):
     """Flips image and boxes horizontally
 
     Arguments:
@@ -61,22 +60,23 @@ def random_flip_horizontal(
     Returns:
       Randomly flipped image and boxes
     """
-    if tf.random.uniform((), dtype=tf.float16) > prob:
+
+    if tf.random.uniform(()) > prob:
         image = tf.image.flip_left_right(image)
         bboxes = tf.stack(
-            [image_shape[1] - bboxes[:, 2],
-             bboxes[:, 1],
-             image_shape[1] - bboxes[:, 0],
-             bboxes[:, 3]]
-            , axis=-1
+            [
+                image_shape[1] - bboxes[..., 2] - 1,
+                bboxes[..., 1],
+                image_shape[1] - bboxes[..., 0] - 1,
+                bboxes[..., 3]
+            ],
+            axis=-1
         )
     return image, bboxes
 
 
 @tf.function
-def tf_rotate(
-        image, image_shape, bboxes, prob=0.5
-):
+def tf_rotate(image, image_shape, bboxes, prob=0.5):
     offset = image_shape / 2.
     rotate_k = tf.random.uniform((), minval=1, maxval=4, dtype=tf.int32)
 
@@ -124,93 +124,204 @@ def tf_rotate(
 
 
 @tf.function
-def multi_scale(
-        image, image_shape, bboxes, prob=0.5
-):
-    if tf.random.uniform((), dtype=tf.float16) > prob:
+def multi_scale(image, image_shape, bboxes, prob=0.5):
+    new_image_shape = image_shape
+
+    if tf.random.uniform(()) > prob:
         # start, end, step = 0.25, 1.3, 0.05
         # scale = np.random.choice(np.arange(start, end, step))
         scale = tf.random.uniform((), minval=0.6, maxval=2.0)
 
-        new_image_shape = tf.cast(image_shape * scale, dtype=tf.int32)
-        image = tf.image.resize(image, new_image_shape, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-
-        image_shape *= scale
-        bboxes *= scale
-    return image, image_shape, bboxes
+        new_image_shape = tf.round(image_shape * scale)
+        image = tf.image.resize(
+            image,
+            tf.cast(new_image_shape, tf.int32),
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR
+        )
+        bboxes = tf.stack(
+            [
+                tf.clip_by_value(bboxes[..., 0] * scale, 0, new_image_shape[1] - 2),
+                tf.clip_by_value(bboxes[..., 1] * scale, 0, new_image_shape[0] - 2),
+                tf.clip_by_value(bboxes[..., 2] * scale, 1, new_image_shape[1] - 1),
+                tf.clip_by_value(bboxes[..., 3] * scale, 1, new_image_shape[0] - 1),
+            ],
+            axis=-1
+        )
+        bboxes = tf.round(bboxes)
+    return image, new_image_shape, bboxes
 
 
 @tf.function
-def random_crop(
-        image, image_shape, bboxes, prob=0.5
-):
-    if tf.random.uniform((), dtype=tf.float16) > prob:
-        min_x1y1 = tf.math.reduce_min(bboxes, axis=0)[:2]
-        max_x2y2 = tf.math.reduce_max(bboxes, axis=0)[2:]
+def random_crop(image, image_shape, bboxes, prob=0.5):
+    if tf.random.uniform(()) > prob:
+        min_x1y1 = tf.cast(tf.math.reduce_min(bboxes, axis=0)[:2], tf.int32)
+        max_x2y2 = tf.cast(tf.math.reduce_max(bboxes, axis=0)[2:], tf.int32)
+        new_image_shape = tf.cast(image_shape, tf.int32)
 
-        random_x1 = tf.random.uniform((), minval=0, maxval=tf.maximum(min_x1y1[0] / 2., 1.), dtype=tf.float32)
-        random_y1 = tf.random.uniform((), minval=0, maxval=tf.maximum(min_x1y1[1] / 2., 1.), dtype=tf.float32)
+        random_x1 = tf.random.uniform((), minval=0, maxval=tf.maximum(min_x1y1[0] // 2, 1), dtype=tf.int32)
+        random_y1 = tf.random.uniform((), minval=0, maxval=tf.maximum(min_x1y1[1] // 2, 1), dtype=tf.int32)
 
         random_x2 = tf.random.uniform(
             (),
-            minval=max_x2y2[0] - 1.0,
+            minval=max_x2y2[0] + 1,
             maxval=tf.math.maximum(
-                tf.math.minimum(image_shape[1], max_x2y2[0] + (image_shape[1] - max_x2y2[0]) / 2.),
-                max_x2y2[0]
+                tf.math.minimum(new_image_shape[1], max_x2y2[0] + (new_image_shape[1] - max_x2y2[0]) // 2),
+                max_x2y2[0] + 2
             ),
-            dtype=tf.float32
+            dtype=tf.int32
         )
         random_y2 = tf.random.uniform(
             (),
-            minval=max_x2y2[1] - 1.,
+            minval=max_x2y2[1] + 1,
             maxval=tf.math.maximum(
-                tf.math.minimum(image_shape[0], max_x2y2[1] + (image_shape[0] - max_x2y2[1]) / 2.),
-                max_x2y2[1]
+                tf.math.minimum(new_image_shape[0], max_x2y2[1] + (new_image_shape[0] - max_x2y2[1]) // 2),
+                max_x2y2[1] + 2
             ),
-            dtype=tf.float32
+            dtype=tf.int32
         )
 
         image = tf.image.crop_to_bounding_box(
             image,
-            offset_height=tf.cast(random_y1, dtype=tf.int32),
-            offset_width=tf.cast(random_x1, dtype=tf.int32),
-            target_height=tf.cast(random_y2 - random_y1, dtype=tf.int32),
-            target_width=tf.cast(random_x2 - random_x1, dtype=tf.int32)
+            offset_height=random_y1,
+            offset_width=random_x1,
+            target_height=(random_y2 - random_y1),
+            target_width=(random_x2 - random_x1)
         )
 
         bboxes = tf.stack(
             [
-                bboxes[:, 0] - random_x1,
-                bboxes[:, 1] - random_y1,
-                bboxes[:, 2] - random_x1,
-                bboxes[:, 3] - random_y1,
+                bboxes[:, 0] - tf.cast(random_x1, tf.float32),
+                bboxes[:, 1] - tf.cast(random_y1, tf.float32),
+                bboxes[:, 2] - tf.cast(random_x1, tf.float32),
+                bboxes[:, 3] - tf.cast(random_y1, tf.float32),
             ],
             axis=-1
         )
+        image_shape = tf.cast(tf.shape(image)[:2], tf.float32)
 
-    return image, bboxes
+    return image, image_shape, bboxes
 
 
 def random_image_saturation(image, prob=.5):
     if tf.random.uniform(()) > prob:
-        image = tf.image.random_saturation(image)
+        image = tf.image.random_saturation(image, 1, 3)
 
     return image
 
 
-def bboxes_clip(bboxes, image_shape):
+def random_image_brightness(image, prob=.5):
+    if tf.random.uniform(()) > prob:
+        image = tf.image.random_brightness(image, 0.8, 1.)
+
+    return image
+
+
+def random_image_contrast(image, prob=.5):
+    if tf.random.uniform(()) > prob:
+        image = tf.image.random_contrast(image, 0.2, 1.)
+
+    return image
+
+
+@tf.function
+def _image_transform(image, target_size=512, padding_value=.0):
+    image_height, image_width = tf.shape(image)[0], tf.shape(image)[1]
+
+    if image_height > image_width:
+        scale = tf.cast((target_size / image_height), dtype=tf.float32)
+        resized_height = target_size
+        resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
+    else:
+        scale = tf.cast((target_size / image_width), dtype=tf.float32)
+        resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
+        resized_width = target_size
+
+    image = tf.image.resize(
+        image,
+        (resized_height, resized_width),
+        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+
+    offset_h = (target_size - resized_height) // 2
+    offset_w = (target_size - resized_width) // 2
+
+    # (h, w, c)
+    pad = tf.stack(
+        [
+            tf.stack([offset_h, target_size - resized_height - offset_h], axis=0),
+            tf.stack([offset_w, target_size - resized_width - offset_w], axis=0),
+            tf.constant([0, 0]),
+        ],
+        axis=0
+    )
+
+    image = tf.pad(image, pad, constant_values=padding_value)
+
+    return image, scale, [offset_h, offset_w]
+
+
+@tf.function
+def _bboxes_transform(bboxes, classes, scale, offset_hw, max_bboxes=20, padding=False):
+    # gt_boxes_input
     bboxes = tf.stack(
         [
-            tf.clip_by_value(bboxes[:, 0], 0., image_shape[1] - 2),  # x1
-            tf.clip_by_value(bboxes[:, 1], 0., image_shape[0] - 2),  # y1
-            tf.clip_by_value(bboxes[:, 2], 1., image_shape[1] - 1),  # x2
-            tf.clip_by_value(bboxes[:, 3], 1., image_shape[0] - 1),  # y2
+            (bboxes[:, 0] * scale + tf.cast(offset_hw[1], dtype=tf.float32)),
+            (bboxes[:, 1] * scale + tf.cast(offset_hw[0], dtype=tf.float32)),
+            (bboxes[:, 2] * scale + tf.cast(offset_hw[1], dtype=tf.float32)),
+            (bboxes[:, 3] * scale + tf.cast(offset_hw[0], dtype=tf.float32)),
+            classes
         ],
-        axis=-1
+        axis=-1,
     )
+
+    if padding:
+        # true_label_count
+        bboxes_count = tf.shape(bboxes)[0]
+        max_bbox_pad = tf.stack(
+            [
+                tf.stack([tf.constant(0), max_bboxes - bboxes_count], axis=0),
+                tf.constant([0, 0]),
+            ],
+            axis=0
+        )
+        bboxes = tf.pad(bboxes, max_bbox_pad, constant_values=0.)
+
+    else:
+        bboxes_count = tf.shape(bboxes)[0]
+
+    return bboxes, bboxes_count
+
+
+@tf.function
+def _clip_transformed_bboxes(image, bboxes, debug=False):
+    image_shape = tf.cast(tf.shape(image)[:2], dtype=tf.float32)
+
+    if debug:
+        bboxes = tf.stack(
+            [
+                tf.clip_by_value(bboxes[:, 0] / image_shape[1], 0., 1.),  # x1
+                tf.clip_by_value(bboxes[:, 1] / image_shape[0], 0., 1.),  # y1
+                tf.clip_by_value(bboxes[:, 2] / image_shape[1], 0., 1.),  # x2
+                tf.clip_by_value(bboxes[:, 3] / image_shape[0], 0., 1.),  # y2
+                bboxes[:, -1]
+            ],
+            axis=-1
+        )
+
+    else:
+        bboxes = tf.stack(
+            [
+                tf.clip_by_value(bboxes[:, 0], 0., image_shape[1] - 2),  # x1
+                tf.clip_by_value(bboxes[:, 1], 0., image_shape[0] - 2),  # y1
+                tf.clip_by_value(bboxes[:, 2], 1., image_shape[1] - 1),  # x2
+                tf.clip_by_value(bboxes[:, 3], 1., image_shape[0] - 1),  # y2
+                bboxes[:, -1]
+            ],
+            axis=-1
+        )
     return bboxes
 
 
+@tf.function
 def compute_inputs(sample):
     image = tf.cast(sample["image"], dtype=tf.float32)
     image_shape = tf.cast(tf.shape(image)[:2], dtype=tf.float32)
@@ -219,13 +330,15 @@ def compute_inputs(sample):
 
     bboxes = tf.stack(
         [
-            bboxes[:, 0] * image_shape[1],
-            bboxes[:, 1] * image_shape[0],
-            bboxes[:, 2] * image_shape[1],
-            bboxes[:, 3] * image_shape[0],
+            bboxes[..., 0] * image_shape[1],
+            bboxes[..., 1] * image_shape[0],
+            bboxes[..., 2] * image_shape[1],
+            bboxes[..., 3] * image_shape[0],
         ],
         axis=-1
     )
+    bboxes = tf.round(bboxes)
+    # bboxes -= 1  # DPCB
     return image, image_shape, bboxes, classes
 
 
@@ -243,106 +356,33 @@ def preprocess_data(
 
     """
 
-    def _resize_image(image, target_size=512):
-        image_height, image_width = tf.shape(image)[0], tf.shape(image)[1]
-
-        # if image_height > image_width:
-        #     scale = tf.cast((target_size / image_height), dtype=tf.float32)
-        #     resized_height = target_size
-        #     resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-        # else:
-        #     scale = tf.cast((target_size / image_width), dtype=tf.float32)
-        #     resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-        #     resized_width = target_size
-        #
-        # image = tf.image.resize(
-        #     image,
-        #     (resized_height, resized_width),
-        #     method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-
-        if image_height > target_size or image_width > target_size:
-            if image_height > image_width:
-                scale = tf.cast((target_size / image_height), dtype=tf.float32)
-                resized_height = target_size
-                resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-            else:
-                scale = tf.cast((target_size / image_width), dtype=tf.float32)
-                resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-                resized_width = target_size
-
-            image = tf.image.resize(
-                image,
-                (resized_height, resized_width),
-                method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-
-        else:
-            resized_height = image_height
-            resized_width = image_width
-            scale = 1.0
-
-        offset_h = (target_size - resized_height) // 2
-        offset_w = (target_size - resized_width) // 2
-
-        # (h, w, c)
-        pad = tf.stack([tf.stack([offset_h, offset_h], axis=0),
-                        tf.stack([offset_w, offset_w], axis=0),
-                        tf.constant([0, 0]),
-                        ], axis=0)
-        image = tf.pad(image, pad, constant_values=padding_value)
-
-        return image, scale, offset_h, offset_w
-
-    def _padding_bboxes(bboxes, classes, scale, offset_h, offset_w, padding=True):
-
-        const = float(_image_size[phi]) if debug else 1.
-
-        # gt_boxes_input
-        bboxes = tf.stack(
-            [
-                (bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
-                (bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
-                (bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
-                (bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
-                classes
-            ],
-            axis=-1,
-        )
-        bboxes = tf.clip_by_value(bboxes, 0., 1. if debug else float(_image_size[phi]))
-
-        if padding:
-            # true_label_count
-            bboxes_count = tf.shape(bboxes)[0]
-            max_bbox_pad = tf.stack([tf.stack([tf.constant(0), max_bboxes - bboxes_count], axis=0),
-                                     tf.constant([0, 0]),
-                                     ], axis=0)
-            bboxes = tf.pad(bboxes, max_bbox_pad, constant_values=0.)
-
-        else:
-            bboxes_count = tf.shape(bboxes)[0]
-
-        return bboxes, bboxes_count
-
     def _preprocess_data(sample):
         #
         image, image_shape, bboxes, classes = compute_inputs(sample)
 
-        # Data augmentation
-        image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = tf_rotate(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
+        # Image Shape aug.
+        if config.MISC_AUG:
+            image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
+            image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
+            image, image_shape, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
 
-        # Clip Bboxes
-        bboxes = bboxes_clip(bboxes, image_shape)
+        # Image Color aug.
+        if config.VISUAL_AUG:
+            image = random_image_saturation(image, prob=0.5)
+            image = random_image_brightness(image, prob=0.5)
+            image = random_image_contrast(image, prob=0.5)
 
-        #
-        image, scale, offset_h, offset_w = _resize_image(image=image, target_size=_image_size[phi])
+        # Transforming image and bboxes into fixed-size.
+        image, scale, offset_hw = _image_transform(image, _image_size[phi], padding_value)
         image = _normalization_image(image, mode) if not debug else image
 
-        bboxes, bboxes_count = _padding_bboxes(bboxes, classes, scale, offset_h, offset_w, padding=True)
+        # Clipping bboxes
+        bboxes, bboxes_count = _bboxes_transform(bboxes, classes, scale, offset_hw, max_bboxes, padding=False)
+        bboxes = _clip_transformed_bboxes(image, bboxes, debug=debug)
 
         fmaps_shape = tf.constant(fmap_shapes, dtype=tf.int32)
-        return image, bboxes, bboxes_count[None], fmaps_shape
+        # return image, bboxes, bboxes_count[None], fmaps_shape
+        return image, bboxes, scale, image_shape
 
     return _preprocess_data
 
@@ -360,91 +400,29 @@ def preprocess_data_v2(
 
     """
 
-    def _resize_image(image, target_size=512):
-        image_height, image_width = tf.shape(image)[0], tf.shape(image)[1]
-
-        if image_height > image_width:
-            scale = tf.cast((target_size / image_height), dtype=tf.float32)
-            resized_height = target_size
-            resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-        else:
-            scale = tf.cast((target_size / image_width), dtype=tf.float32)
-            resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-            resized_width = target_size
-
-        image = tf.image.resize(
-                image,
-                (resized_height, resized_width),
-                method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-
-        # if image_height > target_size or image_width > target_size:
-        #     if image_height > image_width:
-        #         scale = tf.cast((target_size / image_height), dtype=tf.float32)
-        #         resized_height = target_size
-        #         resized_width = tf.cast((tf.cast(image_width, dtype=tf.float32) * scale), dtype=tf.int32)
-        #     else:
-        #         scale = tf.cast((target_size / image_width), dtype=tf.float32)
-        #         resized_height = tf.cast((tf.cast(image_height, dtype=tf.float32) * scale), dtype=tf.int32)
-        #         resized_width = target_size
-        #
-        #     image = tf.image.resize(
-        #         image,
-        #         (resized_height, resized_width),
-        #         method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-        #
-        # else:
-        #     resized_height = image_height
-        #     resized_width = image_width
-        #     scale = 1.0
-
-        offset_h = (target_size - resized_height) // 2
-        offset_w = (target_size - resized_width) // 2
-
-        # (h, w, c)
-        pad = tf.stack([tf.stack([offset_h, offset_h], axis=0),
-                        tf.stack([offset_w, offset_w], axis=0),
-                        tf.constant([0, 0]),
-                        ], axis=0)
-        image = tf.pad(image, pad, constant_values=padding_value)
-
-        return image, scale, offset_h, offset_w
-
-    def _padding_bboxes(bboxes, classes, scale, offset_h, offset_w):
-
-        const = float(_image_size[phi]) if debug else 1.
-
-        # gt_boxes_input
-        bboxes = tf.stack(
-            [
-                (bboxes[:, 0] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
-                (bboxes[:, 1] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
-                (bboxes[:, 2] * scale + tf.cast(offset_w, dtype=tf.float32)) / const,
-                (bboxes[:, 3] * scale + tf.cast(offset_h, dtype=tf.float32)) / const,
-                classes
-            ],
-            axis=-1,
-        )
-        bboxes = tf.clip_by_value(bboxes, 0., 1. if debug else float(_image_size[phi]))
-        return bboxes
-
     def _preprocess_data(sample):
         #
         image, image_shape, bboxes, classes = compute_inputs(sample)
 
-        # Data augmentation
-        image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = tf_rotate(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
-        image, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
+        # Image Shape aug.
+        if config.MISC_AUG:
+            image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
+            image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
+            image, image_shape, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
 
-        # Clip Bboxes
-        bboxes = bboxes_clip(bboxes, image_shape)
+        # Image Color aug.
+        if config.VISUAL_AUG:
+            image = random_image_saturation(image, prob=0.5)
+            image = random_image_brightness(image, prob=0.5)
+            image = random_image_contrast(image, prob=0.5)
 
-        #
-        image, scale, offset_h, offset_w = _resize_image(image=image, target_size=_image_size[phi])
+        # Transforming image and bboxes into fixed-size.
+        image, scale, offset_hw = _image_transform(image, _image_size[phi], padding_value)
         image = _normalization_image(image, mode) if not debug else image
 
-        bboxes = _padding_bboxes(bboxes, classes, scale, offset_h, offset_w)
+        # Clipping bboxes
+        bboxes, bboxes_count = _bboxes_transform(bboxes, classes, scale, offset_hw, padding=False)
+        bboxes = _clip_transformed_bboxes(image, bboxes, debug=debug)
 
         fmaps_shape = tf.constant(fmap_shapes, dtype=tf.int32)
         return image, bboxes[:, :4], bboxes[:, -1], fmaps_shape
@@ -518,7 +496,6 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
             # (fh, fw)
             _area = tf.pad(_area, neg_pad, constant_values=1e7)
 
-            # ToDO: cls, loc, area, ap_weight, mask
             return _cls_target, _loc_target, _area
 
         # cls_target : shape = (anchor-points, fh, fw, cls_num + 2)
@@ -573,7 +550,6 @@ def inputs_targets(image, bboxes, bboxes_count, fmaps_shape):
     return inputs
 
 
-# def inputs_targets_v2(image, cls_target, reg_target):
 def inputs_targets_v2(image, cls_target, reg_target, ind_target, bboxes_cnt):
     # image, cls_target, reg_target
     inputs = {
@@ -666,8 +642,8 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=
         debug=debug
     ), num_parallel_calls=autotune)
 
-    train = train.shuffle(1000)
-    train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0, 0), drop_remainder=True)
+    train = train.shuffle(2000)
+    train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0., 0.), drop_remainder=True)
     train = train.map(inputs_targets, num_parallel_calls=autotune)
     train = train.prefetch(autotune)
     return train, test
@@ -676,10 +652,11 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=
 if __name__ == '__main__':
     bs = 4
 
-    train_t, test_t = create_pipeline_v2(
+    train_t, test_t = create_pipeline_test(
         phi=1,
         batch_size=bs,
-        debug=True
+        debug=True,
+        db="VOC"
     )
 
     """
@@ -697,55 +674,67 @@ if __name__ == '__main__':
     
     """
 
-    iterations = 1
-    for step, inputs_batch in enumerate(train_t):
-        if (step + 1) > iterations:
-            break
-
-        print(f"[INFO] {step + 1} / {iterations}")
-
-        _cls = inputs_batch['cls_target'].numpy()
-        _loc = inputs_batch['loc_target'].numpy()
-        _ind = inputs_batch['ind_target'].numpy()
-        _int = inputs_batch['bboxes_cnt'].numpy()
-
-    # import matplotlib.pyplot as plt
-    #
-    # iterations = 10
-    # plt.figure(figsize=(10, 8))
-    #
+    # iterations = 1
     # for step, inputs_batch in enumerate(train_t):
     #     if (step + 1) > iterations:
     #         break
     #
     #     print(f"[INFO] {step + 1} / {iterations}")
     #
-    #     images = inputs_batch['image']
-    #     bboxes = inputs_batch['bboxes']
+    #     _cls = inputs_batch['cls_target'].numpy()
+    #     _loc = inputs_batch['loc_target'].numpy()
+    #     _ind = inputs_batch['ind_target'].numpy()
+    #     _int = inputs_batch['bboxes_cnt'].numpy()
     #
-    #     bboxes = tf.stack(
-    #         [
-    #             bboxes[..., 1],
-    #             bboxes[..., 0],
-    #             bboxes[..., 3],
-    #             bboxes[..., 2],
-    #         ],
-    #         axis=-1
-    #     )
+    # p7_cls = np.reshape(_cls[0, 8500:, -2], (5, 5))
+    # p6_cls = np.reshape(_cls[0, 8400:8500, -2], (10, 10))
+    # p5_cls = np.reshape(_cls[0, 8000:8400, -2], (20, 20))
     #
-    #     colors = np.array([[255.0, 0.0, 0.0]])
-    #     images = tf.image.draw_bounding_boxes(
-    #         images,
-    #         bboxes,
-    #         colors=colors
-    #     )
-    #
-    #     for i in range(bs):
-    #         plt.subplot(2, 2, i + 1)
-    #         plt.imshow(images[i].numpy().astype("uint8"))
-    #         # print(bboxes[i])
-    #
-    #     plt.pause(0.001)
+    # p7_loc = np.reshape(_loc[0, 8500:, -2], (5, 5))
+    # p6_loc = np.reshape(_loc[0, 8400:8500, -2], (10, 10))
+    # p5_loc = np.reshape(_loc[0, 8000:8400, -2], (20, 20))
+
+    import matplotlib.pyplot as plt
+
+    iterations = 10
+
+    print('test')
+
+    for step, inputs_batch in enumerate(train_t):
+        if (step + 1) > iterations:
+            break
+
+        print(f"[INFO] {step + 1} / {iterations}")
+
+        _images = inputs_batch['image'].numpy()
+        _bboxes = inputs_batch['bboxes'].numpy()
+        _scales = inputs_batch['bboxes_count'].numpy()
+        _images_shape = inputs_batch['fmaps_shape'].numpy()
+
+        _bboxes = tf.stack(
+            [
+                _bboxes[..., 1],
+                _bboxes[..., 0],
+                _bboxes[..., 3],
+                _bboxes[..., 2],
+            ],
+            axis=-1
+        )
+
+        colors = np.array([[255.0, 0.0, 0.0]])
+        _images = tf.image.draw_bounding_boxes(
+            _images,
+            _bboxes,
+            colors=colors
+        )
+
+        plt.figure(figsize=(10, 8))
+        for i in range(bs):
+            plt.subplot(2, 2, i + 1)
+            plt.imshow(_images[i].numpy().astype("uint8"))
+            # print(bboxes[i])
+        plt.tight_layout()
+        plt.pause(0)
 
     # tfds.benchmark(train_t, batch_size=bs)
     # tfds.benchmark(train_t, batch_size=bs)

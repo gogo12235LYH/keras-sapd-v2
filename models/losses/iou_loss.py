@@ -125,7 +125,7 @@ def compute_iou_v2(mode='fciou'):
             g_h_intersect = tf.maximum(pred_bottom, target_bottom) + tf.maximum(pred_top, target_top)
             close_area = g_w_intersect * g_h_intersect
 
-            g_iou = classic_iou - (close_area - area_union) / close_area
+            g_iou = classic_iou - (close_area - area_union + 1e-7) / (close_area + 1e-7)
             iou_loss = 1 - g_iou
 
         elif mode == 'ciou':
@@ -358,7 +358,6 @@ def iou_mask_v2(mode='fciou', factor=1.0):
 
 
 def iou_mask_v3(mode='fciou', factor=1.0):
-    @tf.function(jit_compile=True)
     def iou_mask_(inputs):
         y_true, y_pred, soft_weight, mask = inputs[0][..., :4], inputs[1], inputs[0][..., 4], inputs[0][..., 5]
         y_true = tf.maximum(y_true, 0)
@@ -370,12 +369,11 @@ def iou_mask_v3(mode='fciou', factor=1.0):
         iou_loss = iou_method(soft_weight, y_pred, y_true)
 
         # mask
-        # masked_iou_loss = tf.boolean_mask(iou_loss, mask)
+        masked_iou_loss = tf.boolean_mask(iou_loss, mask)
 
         # compute the normalizer: the number of positive locations
         normalizer = keras.backend.maximum(1., tf.reduce_sum(mask * soft_weight))
-        # return factor * tf.reduce_sum(masked_iou_loss) / normalizer
-        return factor * tf.reduce_sum(iou_loss * mask) / normalizer
+        return factor * tf.reduce_sum(masked_iou_loss) / normalizer
 
     @tf.function(jit_compile=True)  # only for tensorflow 2.6, sometimes should use experiment_compile
     def iou_method(soft_weight, y_pred, y_true):
@@ -417,7 +415,7 @@ def iou_mask_v3(mode='fciou', factor=1.0):
             g_h_intersect = tf.maximum(pred_bottom, target_bottom) + tf.maximum(pred_top, target_top)
             close_area = g_w_intersect * g_h_intersect
 
-            g_iou = iou - (close_area - area_union) / close_area
+            g_iou = iou - (close_area - area_union + 1e-7) / (close_area + 1e-7)
             iou_loss = (1 - g_iou) * soft_weight
 
         elif mode == 'ciou':
