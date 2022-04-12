@@ -51,7 +51,6 @@ def create_callbacks(
         )
 
     if config.USING_HISTORY:
-        info_ = info_ + "History, "
 
         _cosine_decay_dict = {
             "total_epochs": config.EPOCHs,
@@ -69,6 +68,8 @@ def create_callbacks(
         }
 
         if config.LR_Scheduler == 1:
+            info_ = info_ + "History (Cosine Decay), "
+
             cbs.append(
                 History(
                     lr_scheduler=cosine_decay_scheduler(
@@ -85,6 +86,8 @@ def create_callbacks(
             )
 
         elif config.LR_Scheduler == 2:
+            info_ = info_ + "History (Steps Decay), "
+
             cbs.append(
                 History(
                     lr_scheduler=steps_decay_scheduler(
@@ -100,6 +103,8 @@ def create_callbacks(
 
     if config.EARLY_STOPPING:
         # Early stopping.
+        info_ += 'EarlyStopping'
+
         cbs.append(
             keras.callbacks.EarlyStopping(
                 monitor='loss',
@@ -109,7 +114,8 @@ def create_callbacks(
                 verbose=1,
             )
         )
-        print(info_ + 'EarlyStopping')
+
+    print(info_)
     return cbs
 
 
