@@ -44,10 +44,16 @@ class StandardHead(keras.layers.Layer):
             kernel_initializer=tf.initializers.RandomNormal(0.0, 0.01),
             bias_initializer=tf.constant_initializer(0.1),
         )
-
+        self.cen_conv2d = keras.layers.Conv2D(
+            filters=1, kernel_size=3, strides=1, padding='same',
+            kernel_initializer=tf.initializers.RandomNormal(0.0, 0.01),
+        )
+        self.cls_act = keras.layers.Activation('sigmoid', dtype='float32')
         self.cls_reshape = keras.layers.Reshape((-1, self.num_cls))
         self.reg_reshape = keras.layers.Reshape((-1, 4))
+        self.cen_reshape = keras.layers.Reshape((-1, 1))
 
+    @tf.function
     def call(self, inputs, training=None, mask=None):
         cls = inputs
         reg = inputs
@@ -56,14 +62,16 @@ class StandardHead(keras.layers.Layer):
         reg = self.reg_blocks(reg)
 
         cls = self.cls_conv2d(cls)
-        reg = self.reg_conv2d(reg)
+        reg_out = self.reg_conv2d(reg)
+        cen_out = self.cen_conv2d(reg)
 
-        cls = keras.layers.Activation('sigmoid', dtype='float32')(cls)
-        reg = keras.layers.Activation('relu', dtype='float32')(reg)
+        cls = keras.layers.Multiply()([self.cls_act(cls), self.cls_act(cen_out)])
+        reg_out = keras.layers.Activation('relu', dtype='float32')(reg_out)
 
         cls = self.cls_reshape(cls)
-        reg = self.reg_reshape(reg)
-        return cls, reg
+        reg_out = self.reg_reshape(reg_out)
+        cen_out = self.cen_reshape(cen_out)
+        return cls, reg_out, cen_out
 
     def get_config(self):
         c_fig = super(StandardHead, self).get_config()
@@ -79,7 +87,7 @@ class StandardHead(keras.layers.Layer):
 
 
 def StdSubnetworks(input_features, width=256, depth=4, num_cls=20):
-    cls, reg = [], []
+    cls, reg, cen = [], [], []
 
     subnetworks = StandardHead(width=width, depth=depth, num_cls=num_cls)
 
@@ -87,10 +95,12 @@ def StdSubnetworks(input_features, width=256, depth=4, num_cls=20):
         outputs = subnetworks(feature)
         cls.append(outputs[0])
         reg.append(outputs[1])
+        cen.append(outputs[2])
 
     cls_out = keras.layers.Concatenate(axis=1, name='cls_head')(cls)
     reg_out = keras.layers.Concatenate(axis=1, name='reg_head')(reg)
-    return cls_out, reg_out
+    cen_out = keras.layers.Concatenate(axis=1, name='cen_head')(cen)
+    return cls_out, reg_out, cen_out
 
 
 class Subnetworks(keras.Model):
@@ -104,17 +114,19 @@ class Subnetworks(keras.Model):
         self.head = StandardHead(width=width, depth=depth, num_cls=num_cls, gn=1)
 
     def call(self, inputs, training=None, mask=None):
-        cls, reg = [], []
+        cls, reg, cen = [], [], []
 
         for input_features in inputs:
             out = self.head(input_features)
             cls.append(out[0])
             reg.append(out[1])
+            cen.append(out[2])
 
         cls_out = keras.layers.Concatenate(axis=1, name='cls_head')(cls)
         reg_out = keras.layers.Concatenate(axis=1, name='reg_head')(reg)
+        cen_out = keras.layers.Concatenate(axis=1, name='cen_head')(cen)
 
-        return cls_out, reg_out
+        return cls_out, reg_out, cen_out
 
     def get_config(self):
         cfg = super(Subnetworks, self).get_config()

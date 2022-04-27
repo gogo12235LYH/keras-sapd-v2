@@ -315,7 +315,6 @@ class Generator(keras.utils.Sequence):
         """
         batch_images = np.array(image_group).astype(np.float32)
         batch_gt_boxes = np.zeros((len(image_group), self.max_gt_boxes, 5), dtype=np.float32)
-        batch_num_gt_boxes = np.zeros((len(image_group), 1), dtype=np.int32)
         batch_fm_shapes = np.tile(self.fm_shapes[None], (len(image_group), 1, 1))
 
         # copy all images to the upper left part of the image batch object
@@ -326,8 +325,8 @@ class Generator(keras.utils.Sequence):
             labels = annotations['labels'].astype(np.float32)
             gt_boxes = np.concatenate([boxes, labels[:, None]], axis=-1)
             batch_gt_boxes[image_index, :gt_boxes.shape[0]] = gt_boxes
-            batch_num_gt_boxes[image_index, 0] = gt_boxes.shape[0]
-        return [batch_images, batch_gt_boxes, batch_num_gt_boxes, batch_fm_shapes]
+
+        return [batch_images, batch_gt_boxes, batch_fm_shapes]
 
     @staticmethod
     def compute_targets(image_group):
@@ -374,12 +373,13 @@ class Generator(keras.utils.Sequence):
         inputs = self.compute_inputs(image_group, annotations_group)
 
         # compute network targets
-        targets = self.compute_targets(image_group)
+
+        # targets = self.compute_targets(image_group)
 
         if debug:
-            return inputs, targets, annotations_group
+            return inputs, annotations_group
 
-        return inputs, targets
+        return inputs
 
     def __len__(self):
         """
@@ -392,8 +392,8 @@ class Generator(keras.utils.Sequence):
         Keras sequence method for generating batches.
         """
         group = self.groups[index]
-        inputs, targets = self.compute_inputs_targets(group)
-        return inputs, targets
+        inputs = self.compute_inputs_targets(group)
+        return inputs
 
     def preprocess_image(self, image):
         image_height, image_width = image.shape[:2]

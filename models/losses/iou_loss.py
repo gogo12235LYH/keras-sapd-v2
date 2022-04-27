@@ -118,7 +118,8 @@ def compute_iou_v2(mode='fciou'):
 
         if mode == 'iou':
             # (num_pos, )
-            iou_loss = -tf.math.log(classic_iou)
+            # iou_loss = -tf.math.log(classic_iou)
+            iou_loss = classic_iou
 
         elif mode == 'giou':
             g_w_intersect = tf.maximum(pred_left, target_left) + tf.maximum(pred_right, target_right)
@@ -366,12 +367,13 @@ def iou_mask_v3(mode='fciou', factor=1.0):
 
         soft_weight *= fmn_out[..., 0]
 
+        # (batch, anchor-points)
         iou_loss = iou_method(soft_weight, y_pred, y_true)
 
         # mask
         masked_iou_loss = tf.boolean_mask(iou_loss, mask)
 
-        # compute the normalizer: the number of positive locations
+        # compute the normalizer: the number of positive location
         normalizer = keras.backend.maximum(1., tf.reduce_sum(mask * soft_weight))
         return factor * tf.reduce_sum(masked_iou_loss) / normalizer
 

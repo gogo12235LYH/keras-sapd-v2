@@ -1,6 +1,7 @@
 import config
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras as keras
 import tensorflow_datasets as tfds
 from utils.util_graph import shrink_and_normalize_boxes, create_reg_positive_sample
 
@@ -61,7 +62,7 @@ def random_flip_horizontal(image, image_shape, bboxes, prob=0.5):
       Randomly flipped image and boxes
     """
 
-    if tf.random.uniform(()) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         image = tf.image.flip_left_right(image)
         bboxes = tf.stack(
             [
@@ -76,7 +77,7 @@ def random_flip_horizontal(image, image_shape, bboxes, prob=0.5):
 
 
 @tf.function
-def tf_rotate(image, image_shape, bboxes, prob=0.5):
+def random_rotate(image, image_shape, bboxes, prob=0.5):
     offset = image_shape / 2.
     rotate_k = tf.random.uniform((), minval=1, maxval=4, dtype=tf.int32)
 
@@ -95,6 +96,8 @@ def tf_rotate(image, image_shape, bboxes, prob=0.5):
         x_r = x * tf_cos + y * tf_sin + new_offset_w
         y_r = x * tf_sin * -1 + y * tf_cos + new_offset_h
 
+        x_r = tf.round(x_r)
+        y_r = tf.round(y_r)
         return x_r, y_r
 
     def _rotate_bbox(bbox):
@@ -107,12 +110,14 @@ def tf_rotate(image, image_shape, bboxes, prob=0.5):
         x2_n, y2_n = _r_method(x2, y2, angle)
 
         bbox = tf.stack([
-            tf.minimum(x1_n, x2_n), tf.minimum(y1_n, y2_n),
-            tf.maximum(x1_n, x2_n), tf.maximum(y1_n, y2_n)
+            tf.minimum(x1_n, x2_n),
+            tf.minimum(y1_n, y2_n),
+            tf.maximum(x1_n, x2_n),
+            tf.maximum(y1_n, y2_n)
         ])
         return bbox
 
-    if tf.random.uniform((), dtype=tf.float16) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         image = tf.image.rot90(image, k=rotate_k)
 
         bboxes = tf.map_fn(
@@ -120,23 +125,34 @@ def tf_rotate(image, image_shape, bboxes, prob=0.5):
             elems=bboxes,
             fn_output_signature=tf.float32
         )
-    return image, bboxes
+        image_shape = tf.cast(tf.shape(image)[:2], tf.float32)
+        bboxes = tf.stack(
+            [
+                tf.clip_by_value(bboxes[:, 0], 0., image_shape[1] - 2),  # x1
+                tf.clip_by_value(bboxes[:, 1], 0., image_shape[0] - 2),  # y1
+                tf.clip_by_value(bboxes[:, 2], 1., image_shape[1] - 1),  # x2
+                tf.clip_by_value(bboxes[:, 3], 1., image_shape[0] - 1),  # y2
+                bboxes[:, -1]
+            ],
+            axis=-1
+        )
+    return image, image_shape, bboxes
 
 
 @tf.function
 def multi_scale(image, image_shape, bboxes, prob=0.5):
     new_image_shape = image_shape
 
-    if tf.random.uniform(()) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         # start, end, step = 0.25, 1.3, 0.05
         # scale = np.random.choice(np.arange(start, end, step))
-        scale = tf.random.uniform((), minval=0.6, maxval=2.0)
+        scale = tf.random.uniform((), minval=0.8, maxval=1.3)
 
         new_image_shape = tf.round(image_shape * scale)
         image = tf.image.resize(
             image,
             tf.cast(new_image_shape, tf.int32),
-            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR
+            method=tf.image.ResizeMethod.BILINEAR
         )
         bboxes = tf.stack(
             [
@@ -153,7 +169,7 @@ def multi_scale(image, image_shape, bboxes, prob=0.5):
 
 @tf.function
 def random_crop(image, image_shape, bboxes, prob=0.5):
-    if tf.random.uniform(()) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         min_x1y1 = tf.cast(tf.math.reduce_min(bboxes, axis=0)[:2], tf.int32)
         max_x2y2 = tf.cast(tf.math.reduce_max(bboxes, axis=0)[2:], tf.int32)
         new_image_shape = tf.cast(image_shape, tf.int32)
@@ -203,22 +219,38 @@ def random_crop(image, image_shape, bboxes, prob=0.5):
 
 
 def random_image_saturation(image, prob=.5):
-    if tf.random.uniform(()) > prob:
-        image = tf.image.random_saturation(image, 1, 3)
+    if tf.random.uniform(()) > (1 - prob):
+        image = tf.image.random_saturation(image, 1, 5)
 
     return image
 
 
 def random_image_brightness(image, prob=.5):
-    if tf.random.uniform(()) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         image = tf.image.random_brightness(image, 0.8, 1.)
 
     return image
 
 
 def random_image_contrast(image, prob=.5):
-    if tf.random.uniform(()) > prob:
+    if tf.random.uniform(()) > (1 - prob):
         image = tf.image.random_contrast(image, 0.2, 1.)
+
+    return image
+
+
+@tf.function
+def image_color_augmentation(image):
+    ids = int(tf.random.uniform((), minval=0, maxval=3))
+
+    if ids == 0:
+        image = random_image_saturation(image)
+
+    elif ids == 1:
+        image = random_image_brightness(image)
+
+    elif ids == 2:
+        image = random_image_contrast(image)
 
     return image
 
@@ -261,13 +293,13 @@ def _image_transform(image, target_size=512, padding_value=.0):
 
 @tf.function
 def _bboxes_transform(bboxes, classes, scale, offset_hw, max_bboxes=20, padding=False):
-    # gt_boxes_input
+    bboxes *= scale
     bboxes = tf.stack(
         [
-            (bboxes[:, 0] * scale + tf.cast(offset_hw[1], dtype=tf.float32)),
-            (bboxes[:, 1] * scale + tf.cast(offset_hw[0], dtype=tf.float32)),
-            (bboxes[:, 2] * scale + tf.cast(offset_hw[1], dtype=tf.float32)),
-            (bboxes[:, 3] * scale + tf.cast(offset_hw[0], dtype=tf.float32)),
+            (bboxes[:, 0] + tf.cast(offset_hw[1], dtype=tf.float32)),
+            (bboxes[:, 1] + tf.cast(offset_hw[0], dtype=tf.float32)),
+            (bboxes[:, 2] + tf.cast(offset_hw[1], dtype=tf.float32)),
+            (bboxes[:, 3] + tf.cast(offset_hw[0], dtype=tf.float32)),
             classes
         ],
         axis=-1,
@@ -330,19 +362,17 @@ def compute_inputs(sample):
 
     bboxes = tf.stack(
         [
-            bboxes[..., 0] * image_shape[1],
-            bboxes[..., 1] * image_shape[0],
-            bboxes[..., 2] * image_shape[1],
-            bboxes[..., 3] * image_shape[0],
+            bboxes[:, 0] * image_shape[1],
+            bboxes[:, 1] * image_shape[0],
+            bboxes[:, 2] * image_shape[1],
+            bboxes[:, 3] * image_shape[0],
         ],
         axis=-1
     )
-    bboxes = tf.round(bboxes)
-    # bboxes -= 1  # DPCB
     return image, image_shape, bboxes, classes
 
 
-def preprocess_data(
+def preprocess_data_v1(
         phi: int = 0,
         mode: str = "ResNetV1",
         fmap_shapes: any = None,
@@ -362,15 +392,14 @@ def preprocess_data(
 
         # Image Shape aug.
         if config.MISC_AUG:
-            image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
+            # image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
+            # image, image_shape, bboxes = random_rotate(image, image_shape, bboxes, prob=.01)
             image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
-            image, image_shape, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
+            # image, image_shape, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
 
         # Image Color aug.
         if config.VISUAL_AUG:
-            image = random_image_saturation(image, prob=0.5)
-            image = random_image_brightness(image, prob=0.5)
-            image = random_image_contrast(image, prob=0.5)
+            image = image_color_augmentation(image)
 
         # Transforming image and bboxes into fixed-size.
         image, scale, offset_hw = _image_transform(image, _image_size[phi], padding_value)
@@ -407,14 +436,13 @@ def preprocess_data_v2(
         # Image Shape aug.
         if config.MISC_AUG:
             image, image_shape, bboxes = multi_scale(image, image_shape, bboxes, prob=0.5)
+            image, image_shape, bboxes = random_rotate(image, image_shape, bboxes, prob=.5)
             image, bboxes = random_flip_horizontal(image, image_shape, bboxes, prob=0.5)
             image, image_shape, bboxes = random_crop(image, image_shape, bboxes, prob=0.5)
 
         # Image Color aug.
         if config.VISUAL_AUG:
-            image = random_image_saturation(image, prob=0.5)
-            image = random_image_brightness(image, prob=0.5)
-            image = random_image_contrast(image, prob=0.5)
+            image = image_color_augmentation(image)
 
         # Transforming image and bboxes into fixed-size.
         image, scale, offset_hw = _image_transform(image, _image_size[phi], padding_value)
@@ -540,7 +568,7 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
     return image, cls_target_, reg_target_, ind_target_, tf.shape(bboxes)[0][..., None]
 
 
-def inputs_targets(image, bboxes, bboxes_count, fmaps_shape):
+def inputs_targets_v1(image, bboxes, bboxes_count, fmaps_shape):
     inputs = {
         "image": image,
         "bboxes": bboxes,
@@ -551,7 +579,6 @@ def inputs_targets(image, bboxes, bboxes_count, fmaps_shape):
 
 
 def inputs_targets_v2(image, cls_target, reg_target, ind_target, bboxes_cnt):
-    # image, cls_target, reg_target
     inputs = {
         "image": image,
         "cls_target": cls_target,
@@ -562,7 +589,7 @@ def inputs_targets_v2(image, cls_target, reg_target, ind_target, bboxes_cnt):
     return inputs
 
 
-def create_pipeline(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
+def create_pipeline_v1(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
     autotune = tf.data.AUTOTUNE
 
     if db == "DPCB":
@@ -573,49 +600,51 @@ def create_pipeline(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
 
     feature_maps_shapes = _fmap_shapes(phi)
 
-    train = train.map(preprocess_data(
-        phi=phi,
-        mode=mode,
-        fmap_shapes=feature_maps_shapes
-    ), num_parallel_calls=autotune)
+    train = train.map(preprocess_data_v1(phi=phi, mode=mode, fmap_shapes=feature_maps_shapes),
+                      num_parallel_calls=autotune)
 
     train = train.shuffle(train.__len__())
     train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0, 0), drop_remainder=True)
-    train = train.map(inputs_targets, num_parallel_calls=autotune)
+    train = train.map(inputs_targets_v1, num_parallel_calls=autotune)
     train = train.repeat().prefetch(autotune)
     return train, test
 
 
 def create_pipeline_v2(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=False):
     autotune = tf.data.AUTOTUNE
+    _buffer = 1000
 
     if db == "DPCB":
-        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="D:/datasets/")
-
+        (train, test), ds_info = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="D:/datasets/",
+                                           with_info=True)
     elif db == "VOC":
-        (train, test) = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/")
-
+        (train, test), ds_info = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/",
+                                           with_info=True,
+                                           shuffle_files=True)
+    elif db == "VOC_mini":
+        (train, test), ds_info = tfds.load(name="pascal_voc_mini", split=["train", "test"], data_dir="D:/datasets/",
+                                           with_info=True,
+                                           shuffle_files=True)
     else:
-        train = None
-        test = None
+        train, test, ds_info = None, None, None
 
-    feature_maps_shapes = _fmap_shapes(phi)
+    train_examples = ds_info.splits["train"].num_examples
+    test_examples = ds_info.splits["test"].num_examples
+    print(f"[INFO] {db}: train( {train_examples} ), test( {test_examples} )")
 
     train = train.map(preprocess_data_v2(
         phi=phi,
         mode=mode,
-        fmap_shapes=feature_maps_shapes
+        fmap_shapes=_fmap_shapes(phi),
+        debug=debug
     ), num_parallel_calls=autotune)
 
-    train = train.shuffle(1000)
-    train = train.map(_compute_targets, num_parallel_calls=autotune)
-    train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0.0, 0, 0), drop_remainder=True)
+    train = train.shuffle(_buffer, reshuffle_each_iteration=True).repeat()
+    train = train.map(_compute_targets, num_parallel_calls=autotune)  # already for padded tensor.
+    train = train.batch(batch_size=batch_size, drop_remainder=True)
     train = train.map(inputs_targets_v2, num_parallel_calls=autotune)
+    train = train.prefetch(autotune)
 
-    if debug:
-        train = train.prefetch(autotune)
-    else:
-        train = train.repeat().prefetch(autotune)
     return train, test
 
 
@@ -626,7 +655,12 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=
         (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="D:/datasets/")
 
     elif db == "VOC":
-        (train, test) = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/")
+        (train, test) = tfds.load(name="pascal_voc", split=["train", "test"], data_dir="D:/datasets/",
+                                  shuffle_files=True)
+
+    elif db == "VOC_mini":
+        (train, test) = tfds.load(name="pascal_voc_mini", split=["train", "test"], data_dir="D:/datasets/",
+                                  shuffle_files=True)
 
     else:
         train = None
@@ -634,45 +668,45 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=
 
     feature_maps_shapes = _fmap_shapes(phi)
 
-    train = train.map(preprocess_data(
-        phi=phi,
-        mode=mode,
-        fmap_shapes=feature_maps_shapes,
-        max_bboxes=100,
-        debug=debug
-    ), num_parallel_calls=autotune)
+    train = train.map(preprocess_data_v1(phi=phi, mode=mode, fmap_shapes=feature_maps_shapes, max_bboxes=100,
+                                         debug=debug), num_parallel_calls=autotune)
 
-    train = train.shuffle(2000)
+    train = train.shuffle(1000)
     train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0., 0.), drop_remainder=True)
-    train = train.map(inputs_targets, num_parallel_calls=autotune)
+    train = train.map(inputs_targets_v1, num_parallel_calls=autotune)
     train = train.prefetch(autotune)
     return train, test
 
 
 if __name__ == '__main__':
-    bs = 4
+    eps = 10
+    bs = 32
 
-    train_t, test_t = create_pipeline_test(
-        phi=1,
+    train_t, test_t = create_pipeline_v2(
+        phi=config.PHI,
         batch_size=bs,
-        debug=True,
+        # debug=True,
         db="VOC"
     )
 
-    """
-    
-        # batch size with 8 on 640 by 640:
-    
-        # ************ Summary ************
-        # Examples/sec (First included) 181.46 ex/sec (total: 1000 ex, 5.51 sec)
-        # Examples/sec (First only) 1.96 ex/sec (total: 8 ex, 4.08 sec)
-        # Examples/sec (First excluded) 693.80 ex/sec (total: 992 ex, 1.43 sec)
-        # ************ Summary ************
-        # Examples/sec (First included) 188.66 ex/sec (total: 1000 ex, 5.30 sec)
-        # Examples/sec (First only) 2.07 ex/sec (total: 8 ex, 3.86 sec)
-        # Examples/sec (First excluded) 687.46 ex/sec (total: 992 ex, 1.44 sec)
-    
-    """
+    """ """
+    for ep in range(eps):
+        for step, inputs_batch in enumerate(train_t):
+            # _cls = inputs_batch['cls_target'].numpy()
+            # _loc = inputs_batch['loc_target'].numpy()
+            # _ind = inputs_batch['ind_target'].numpy()
+            _int = inputs_batch['bboxes_cnt'].numpy()
+
+            print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {_int[:, 0]}")
+
+            if np.min(_int) == 0:
+                break
+
+            # if step > (16551 // bs) - 3:
+            #     min_cnt = np.min(_int)
+            #     print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {min_cnt}")
+
+    """ """
 
     # iterations = 1
     # for step, inputs_batch in enumerate(train_t):
@@ -694,47 +728,50 @@ if __name__ == '__main__':
     # p6_loc = np.reshape(_loc[0, 8400:8500, -2], (10, 10))
     # p5_loc = np.reshape(_loc[0, 8000:8400, -2], (20, 20))
 
-    import matplotlib.pyplot as plt
+    """ """
 
-    iterations = 10
+    # import matplotlib.pyplot as plt
+    #
+    # iterations = 10
+    # print('test')
+    # plt.figure(figsize=(10, 8))
+    # for step, inputs_batch in enumerate(train_t):
+    #     if (step + 1) > iterations:
+    #         break
+    #
+    #     print(f"[INFO] {step + 1} / {iterations}")
+    #
+    #     _images = inputs_batch['image'].numpy()
+    #     _bboxes = inputs_batch['bboxes'].numpy()
+    #     _scales = inputs_batch['bboxes_count'].numpy()
+    #     _images_shape = inputs_batch['fmaps_shape'].numpy()
+    #
+    #     _bboxes = tf.stack(
+    #         [
+    #             _bboxes[..., 1],
+    #             _bboxes[..., 0],
+    #             _bboxes[..., 3],
+    #             _bboxes[..., 2],
+    #         ],
+    #         axis=-1
+    #     )
+    #
+    #     colors = np.array([[255.0, 0.0, 0.0]])
+    #     _images = tf.image.draw_bounding_boxes(
+    #         _images,
+    #         _bboxes,
+    #         colors=colors
+    #     )
+    #
+    #     for i in range(bs):
+    #         plt.subplot(2, 2, i + 1)
+    #         plt.imshow(_images[i].numpy().astype("uint8"))
+    #         # print(bboxes[i])
+    #     plt.tight_layout()
+    #     plt.pause(1)
+    #     # plt.close()
 
-    print('test')
-
-    for step, inputs_batch in enumerate(train_t):
-        if (step + 1) > iterations:
-            break
-
-        print(f"[INFO] {step + 1} / {iterations}")
-
-        _images = inputs_batch['image'].numpy()
-        _bboxes = inputs_batch['bboxes'].numpy()
-        _scales = inputs_batch['bboxes_count'].numpy()
-        _images_shape = inputs_batch['fmaps_shape'].numpy()
-
-        _bboxes = tf.stack(
-            [
-                _bboxes[..., 1],
-                _bboxes[..., 0],
-                _bboxes[..., 3],
-                _bboxes[..., 2],
-            ],
-            axis=-1
-        )
-
-        colors = np.array([[255.0, 0.0, 0.0]])
-        _images = tf.image.draw_bounding_boxes(
-            _images,
-            _bboxes,
-            colors=colors
-        )
-
-        plt.figure(figsize=(10, 8))
-        for i in range(bs):
-            plt.subplot(2, 2, i + 1)
-            plt.imshow(_images[i].numpy().astype("uint8"))
-            # print(bboxes[i])
-        plt.tight_layout()
-        plt.pause(0)
+    """ """
 
     # tfds.benchmark(train_t, batch_size=bs)
     # tfds.benchmark(train_t, batch_size=bs)

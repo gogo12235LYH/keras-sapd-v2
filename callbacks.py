@@ -178,6 +178,7 @@ def steps_decay_scheduler(
 
     def _steps_decay(current_epoch):
         decay = init_val
+        current_epoch += 1
 
         if (current_epoch / total_epochs) >= .9:
             decay = init_val * (.5 ** 3)

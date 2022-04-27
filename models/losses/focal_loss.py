@@ -78,7 +78,7 @@ def focal_mask(alpha=0.25, gamma=2.0, cutoff=0.0):
         soft_weight = tf.expand_dims(soft_weight, axis=-1)
         cls_loss = focal_weight * soft_weight * keras.backend.binary_crossentropy(y_true, y_pred)
 
-        # compute the normalizer: the number of positive locations
+        # compute the normalizer: the number of positive location
         num_pos = tf.reduce_sum(mask * soft_weight[..., 0])
         normalizer = tf.maximum(1.0, tf.cast(num_pos, dtype=tf.float32))
         return tf.reduce_sum(cls_loss) / normalizer
@@ -114,7 +114,7 @@ def focal_mask_v2(alpha=0.25, gamma=2.0, cutoff=0.1):
 
         cls_loss = focal_weight * soft_weight * keras.backend.binary_crossentropy(y_true, y_pred)
 
-        # compute the normalizer: the number of positive locations
+        # compute the normalizer: the number of positive location
         num_pos = tf.reduce_sum(mask * soft_weight[..., 0])
         normalizer = tf.maximum(1.0, tf.cast(num_pos, dtype=tf.float32))
         return tf.reduce_sum(cls_loss) / normalizer

@@ -66,7 +66,6 @@ def _get_detections(generator, model, score_threshold=0.05, max_detections=100, 
 
     for i in progressbar.progressbar(range(generator.size()), prefix='Running network: '):
         image = generator.load_image(i)
-        src_image = image.copy()
         h, w = image.shape[:2]
 
         image, scale, offset_h, offset_w = generator.preprocess_image(image)
@@ -100,17 +99,6 @@ def _get_detections(generator, model, score_threshold=0.05, max_detections=100, 
         # (n, 6)
         detections = np.concatenate(
             [image_boxes, np.expand_dims(image_scores, axis=1), np.expand_dims(image_labels, axis=1)], axis=1)
-
-        # if visualize:
-        #     draw_annotations(src_image, generator.load_annotations(i), label_to_name=generator.label_to_name)
-        #     draw_detections(src_image, detections[:5, :4], detections[:5, 4], detections[:5, 5].astype(np.int32),
-        #                     label_to_name=generator.label_to_name,
-        #                     score_threshold=score_threshold)
-        #
-        #     # cv2.imwrite(os.path.join(save_path, '{}.png'.format(i)), raw_image)
-        #     cv2.namedWindow('{}'.format(i), cv2.WINDOW_NORMAL)
-        #     cv2.imshow('{}'.format(i), src_image)
-        #     cv2.waitKey(0)
 
         # copy detections to all_detections
         for class_id in range(generator.num_classes()):

@@ -10,15 +10,17 @@ _dataset_path = {
 DATASET = 'DPCB'
 DATABASE_PATH = _dataset_path[DATASET]
 
+
 """ Hyper-parameter setting """
 DB_MODE = 'tf'          # 'tf' or 'keras', it means that using tf.data or keras.util.sequence.
-EPOCHs = 25
-STEPs_PER_EPOCH = 4138  # steps in one epoch, DPCB:1000, VOC:16552
-BATCH_SIZE = 4          # Global Batch size
-NUM_CLS = 20
+EPOCHs = 100
+BATCH_SIZE = 2          # Global Batch size
+STEPs_PER_EPOCH = 1000 // BATCH_SIZE  # steps in each epochs, DPCB:1000, VOC:16551, VOC_mini: 4138
+NUM_CLS = 6
 PHI = 1                 # B0:(512, 512), B1:(640, 640), B2:(768, 768), B3:(896, 896), B4:(1024, 1024) ~ B7(1048, 1048)
 MULTI_GPU = 0
 MIXED_PRECISION = 1
+
 
 """ Optimizer Setting """
 OPTIMIZER = 'AdamW'      # SGDW, AdamW, SGD, Adam
@@ -35,13 +37,14 @@ EARLY_STOPPING = 0
 EVALUATION = 0          # AP.5, Return training and Inference model when creating model function is called.
 TENSORBOARD = 0
 
+
 """ Warm Up """
 USING_WARMUP = 0
 WP_EPOCHs = int(0.1 * EPOCHs)
 WP_RATIO = 0.1
 
+
 """ Cosine Decay learning rate scheduler setting """
-# ALPHA = np.round(MIN_LR / BASE_LR, 4)
 ALPHA = 0.              # Cosine Decay's alpha
 
 
@@ -54,7 +57,8 @@ MixUp_AUG = 0
 """ Backbone: Feature Extractor """
 BACKBONE_TYPE = 'ResNetV1'  # ResNetV1, SEResNet
 BACKBONE = 50           # 50 101
-FREEZE_BN = False
+FROZEN_BACKBONE_STAGE = False
+FROZEN_BACKBONE_BN = False
 PRETRAIN = 1            # 0 for from scratch, 1 for Imagenet, 2 for the weight's path that you want to load in.
 PRETRAIN_WEIGHT = './xxxx.h5'
 

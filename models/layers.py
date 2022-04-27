@@ -110,73 +110,7 @@ class UpsampleLike(keras.layers.Layer):
         # return input_shape[0][0], input_shape[1][1], input_shape[1][2], input_shape[0][-1]
 
 
-class Locations(keras.layers.Layer):
-    """
-
-    """
-
-    def __init__(self, strides, *args, **kwargs):
-        self.strides = strides
-        super(Locations, self).__init__(*args, **kwargs)
-
-    def call(self, inputs, **kwargs):
-        # Each inputs' shape : (B, F_H, F_W, Filter) from FPN's [P3, P4, P5, P6, P7]
-        feature_shapes = [k.shape(feature)[1:3] for feature in inputs]
-
-        locations_per_feature = []
-        # Ex: size = [80, 40, 20, 10, 5]
-        for feature_shape, stride in zip(feature_shapes, self.strides):
-            # Ex : feature_shape = (80, 80, 256), stride = 8
-            height, width = feature_shape[0], feature_shape[1]
-
-            # (80,)
-            shift_x = k.arange(0, width * stride, step=stride, dtype=np.float32)
-            shift_y = k.arange(0, height * stride, step=stride, dtype=np.float32)
-
-            # (80, 80)
-            shift_x, shift_y = tf.meshgrid(shift_x, shift_y)
-
-            # (6400,)
-            shift_x = k.reshape(shift_x, (-1,))
-            shift_y = k.reshape(shift_y, (-1,))
-
-            # From FCOS's paper : location was defined as (stride * x + stride // 2, stride * y + stride // 2)
-            locations = k.stack((shift_x, shift_y), axis=1) + stride // 2
-            locations_per_feature.append(locations)
-
-        # total = 6400 + 1600 + 400 + 100 + 25 = 8525
-        # (8525, 2)
-        locations = k.concatenate(locations_per_feature, axis=0)
-
-        # (B, 8525, 2)
-        return k.tile(k.expand_dims(locations, axis=0), (k.shape(inputs[0])[0], 1, 1))
-
-    def compute_output_shape(self, input_shape):
-        feature_shapes = [k.shape(feature)[1:3] for feature in input_shape]
-        total_count = 1
-        for feature_shape in feature_shapes:
-            if None not in feature_shape:
-                total_count = total_count * feature_shape[0] * feature_shape[1]
-            else:
-                return input_shape[0][0], None, 2
-
-        return input_shape[0][0], total_count, 2
-
-    def get_config(self):
-        config = super(Locations, self).get_config()
-        config.update(
-            {
-                'strides': self.strides
-            }
-        )
-        return config
-
-
 class Locations2(keras.layers.Layer):
-    """
-
-    """
-
     def __init__(self, strides=(8, 16, 32, 64, 128), *args, **kwargs):
         self.strides = strides
         super(Locations2, self).__init__(dtype='float32', *args, **kwargs)
@@ -234,36 +168,6 @@ class Locations2(keras.layers.Layer):
         return config
 
 
-class RegressionBoxes(keras.layers.Layer):
-    """
-        Input locations and regression which are from Feature maps and model.outputs[0].
-        locations : Feature maps' location.
-        Regression : It is predicted by model's regression sub-model.
-
-        Src : Retinanet, https://github.com/fizyr/keras-retinanet
-    """
-
-    def call(self, inputs, **kwargs):
-        locations, regression = inputs
-
-        # (B, FS, 1)
-        x1 = locations[:, :, 0] - regression[:, :, 0]
-        y1 = locations[:, :, 1] - regression[:, :, 1]
-        x2 = locations[:, :, 0] + regression[:, :, 2]
-        y2 = locations[:, :, 1] + regression[:, :, 3]
-
-        # (B, FS, 4)
-        return k.stack([x1, y1, x2, y2], axis=2)
-
-    def compute_output_shape(self, input_shape):
-        # (B, FS, 4)
-        return input_shape[1]
-
-    def get_config(self):
-        config = super(RegressionBoxes, self).get_config()
-        return config
-
-
 class RegressionBoxes2(keras.layers.Layer):
     """
         Input locations and regression which are from Feature maps and model.outputs[0].
@@ -289,32 +193,6 @@ class RegressionBoxes2(keras.layers.Layer):
     def get_config(self):
         config = super(RegressionBoxes2, self).get_config()
         return config
-
-
-class ClipBoxes(keras.layers.Layer):
-    """
-        過濾圈選框的座標位置，確保所有框都在輸入影像範圍內。
-    """
-
-    def call(self, inputs, **kwargs):
-        # inputs.shape = [(B, height, width, channel)(B, FS, 4)]
-        inputs_image, boxes = inputs
-        shape = k.cast(k.shape(inputs_image), k.floatx())
-        width = shape[2]
-        height = shape[1]
-
-        # (B, FS, 1)
-        x1 = tf.clip_by_value(boxes[:, :, 0], 0, width - 1)
-        y1 = tf.clip_by_value(boxes[:, :, 1], 0, height - 1)
-        x2 = tf.clip_by_value(boxes[:, :, 2], 0, width - 1)
-        y2 = tf.clip_by_value(boxes[:, :, 3], 0, height - 1)
-
-        # (B, FS, 4)
-        return k.stack([x1, y1, x2, y2], axis=2)
-
-    def compute_output_shape(self, input_shape):
-        # (B, FS, 4)
-        return input_shape[1]
 
 
 class ClipBoxes2(keras.layers.Layer):
@@ -344,117 +222,6 @@ class ClipBoxes2(keras.layers.Layer):
     def compute_output_shape(self, input_shape):
         # (B, FS, 4)
         return input_shape[1]
-
-
-def filter_detections(
-        boxes,
-        classification,
-        centerness,
-        class_specific_filter=True,
-        nms=True,
-        score_threshold=0.05,
-        nms_threshold=0.6,
-        max_detections=300
-):
-    """
-    :param boxes:
-    :param classification:
-    :param centerness:
-    :param class_specific_filter:
-    :param nms:
-    :param score_threshold:
-    :param nms_threshold:
-    :param max_detections:
-    :return:
-    """
-
-    # If inputs shape = (640, 640, 3), and class = 6
-    # boxes : (8525, 4)
-    # classification : (8525, 6)
-    # centerness : (8525, 1)
-
-    def _filter_detections(
-            scores_,
-            labels_
-    ):
-        """
-        :param scores_:
-        :param labels_:
-        :return:
-        """
-        # (num,) : 分數大於閥值的位置先回傳
-        indices_ = tf.where(k.greater(scores_, score_threshold))
-
-        if nms:
-            # 根據回傳的位置，篩選選取框、分數及中心
-            filtered_boxes = tf.gather_nd(boxes, indices_)
-            filtered_scores = k.gather(scores_, indices_)[:, 0]
-            filtered_centerness = tf.gather_nd(centerness, indices_)[:, 0]
-            filtered_scores = k.sqrt(filtered_centerness * filtered_scores)
-
-            filtered_boxes_2 = tf.stack([filtered_boxes[:, 1], filtered_boxes[:, 0],
-                                         filtered_boxes[:, 3], filtered_boxes[:, 2]], axis=1)
-
-            nms_indices = tf.image.non_max_suppression(filtered_boxes_2,
-                                                       filtered_scores,
-                                                       max_output_size=max_detections,
-                                                       iou_threshold=nms_threshold)
-
-            # 將經過NMS後的位置回傳 (NMS_num,)
-            indices_ = k.gather(indices_, nms_indices)
-
-        # (NMS_num,)
-        labels_ = tf.gather_nd(labels_, indices_)
-
-        # 將位置與標籤合併, 每個row含有位置及標籤
-        return k.stack([indices_[:, 0], labels_], axis=1)
-
-    if class_specific_filter:
-        all_indices = []
-
-        # If class = 6, c = [0, 1, 2, 3, 4, 5]
-        for c in range(int(classification.shape[1])):
-            # (8525,) : 類別分數
-            scores = classification[:, c]
-
-            # (8525,) : 類別標籤
-            labels = c * tf.ones((k.shape(scores)[0]), dtype='int64')
-            all_indices.append(_filter_detections(scores, labels))
-
-        # (After nms number, 2), 每個 row :(篩選後的位置, 標籤)
-        indices = k.concatenate(all_indices, axis=0)
-
-    else:
-        scores = k.max(classification, axis=1)
-        labels = k.argmax(classification, axis=1)
-        indices = _filter_detections(scores, labels)
-
-    # 重新定義 classification : 每個分數乘上中心分數
-    classification = k.sqrt(classification * centerness)
-
-    # 由位置[0, ..., 8524]及標籤[0, 1, 2, 3, 4, 5]，從classification裡取得分數
-    scores = tf.gather_nd(classification, indices)
-
-    # indices 自帶有標籤，在第二個column裡
-    labels = indices[:, 1]
-
-    scores, top_indices = tf.math.top_k(scores, k=k.minimum(max_detections, k.shape(scores)[0]))
-
-    indices = k.gather(indices[:, 0], top_indices)
-    boxes = k.gather(boxes, indices)
-    labels = k.gather(labels, top_indices)
-
-    # 檢查各個輸出中的第一個col是否補足300
-    pad_size = k.maximum(0, max_detections - k.shape(scores)[0])
-    boxes = tf.pad(boxes, [[0, pad_size], [0, 0]], constant_values=-1)
-    scores = tf.pad(scores, [[0, pad_size]], constant_values=-1)
-    labels = tf.pad(labels, [[0, pad_size]], constant_values=-1)
-    labels = k.cast(labels, 'int32')
-
-    boxes.set_shape([max_detections, 4])
-    scores.set_shape([max_detections])
-    labels.set_shape([max_detections])
-    return [boxes, scores, labels]
 
 
 def filter_detections2(
@@ -549,87 +316,6 @@ def filter_detections2(
     labels.set_shape([max_detections])
 
     return [boxes, scores, labels]
-
-
-class FilterDetections(keras.layers.Layer):
-    def __init__(
-            self,
-            nms=True,
-            class_specific_filter=True,
-            nms_threshold=0.6,
-            score_threshold=0.05,
-            max_detections=300,
-            parallel_iterations=32,
-            **kwargs
-    ):
-        """
-        :param nms:
-        :param class_specific_filter:
-        :param nms_threshold:
-        :param score_threshold:
-        :param max_detections:
-        :param parallel_iterations:
-        :param kwargs:
-        """
-        self.nms = nms
-        self.class_specific_filter = class_specific_filter
-        self.nms_threshold = nms_threshold
-        self.score_threshold = score_threshold
-        self.max_detections = max_detections
-        self.parallel_iterations = parallel_iterations
-        super(FilterDetections, self).__init__(dtype='float32', **kwargs)
-
-    def call(self, inputs, **kwargs):
-        boxes = inputs[0]
-        classification = inputs[1]
-        centerness = inputs[2]
-
-        def _filter_detections(args):
-            boxes_ = args[0]
-            classification_ = args[1]
-            centerness_ = args[2]
-
-            return filter_detections(
-                boxes_,
-                classification_,
-                centerness_,
-                nms=self.nms,
-                class_specific_filter=self.class_specific_filter,
-                score_threshold=self.score_threshold,
-                nms_threshold=self.nms_threshold,
-                max_detections=self.max_detections
-            )
-
-        return tf.map_fn(
-            _filter_detections,
-            elems=[boxes, classification, centerness],
-            fn_output_signature=[k.floatx(), k.floatx(), 'int32'],
-            parallel_iterations=self.parallel_iterations
-        )
-
-    def compute_output_shape(self, input_shape):
-        return [
-            (input_shape[0][0], self.max_detections, 4),
-            (input_shape[1][0], self.max_detections),
-            (input_shape[1][0], self.max_detections)
-        ]
-
-    def compute_mask(self, inputs, mask=None):
-        return (len(inputs) + 1) * [None]
-
-    def get_config(self):
-        config = super(FilterDetections, self).get_config()
-        config.update(
-            {
-                'nms': self.nms,
-                'class_specific_filter': self.class_specific_filter,
-                'nms_threshold': self.nms_threshold,
-                'score_threshold': self.score_threshold,
-                'max_detections': self.max_detections,
-                'parallel_iterations': self.parallel_iterations
-            }
-        )
-        return config
 
 
 class FilterDetections2(keras.layers.Layer):
