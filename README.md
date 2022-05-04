@@ -1,26 +1,25 @@
-# One Stage Detector (SAPD w/ Dynamic Weighted Loss Mask + MaxPoolFilter)
+# One Stage Detector (SAPD w/ Dynamic Weighted Loss Mask, Lite Version of SAPD)
 
 ---
 
-_* 透過動態損失權重遮罩，可在相同精度下得到最佳的訓練時間成本_
-
-_* 歡迎指點另一貢獻 [PCB Defect Detection Based on SAPD with Mix Subnetwork](https://github.com/gogo12235LYH/keras-pcb-sapd-mix)_
-
+* 透過動態損失權重遮罩，可在相同精度下得到最佳的訓練時間成本
+* [PCB Defect Detection Based on SAPD with Mix Subnetwork](https://github.com/gogo12235LYH/keras-pcb-sapd-mix)
 * Tensorflow 2.6.0
-* Keras
 * 3DMF, [End-to-End Object Detection with Fully Convolutional Network](https://arxiv.org/abs/2012.03544)
 
 ---
 
 ## Updates
 
-1. 2020-04-06 -> First Commit.
-2. 2020-04-09 -> DWLM w/ MF on 100 eps.
-
+1. 2022-04-06 -> First Commit.
+2. 2022-04-09 -> DWLM w/ MF on 100 eps.
+3. 2022-04-11 -> Fixed NaN ( tf.reduced_sum 問題 )
+4. 2022-04-28 -> 修正 keras sequence generator (現在可使用 tf.data 或 keras.sequence 囉)
 ## ToDo
 
-1. Keras Sequence generator
+1. ~~Keras Sequence generator~~
 2. README.md 補完
+
 ---
 
 ## 目錄
@@ -72,8 +71,6 @@ MULTI_GPU = 0
 MIXED_PRECISION = 1
 ```
 
-_待..._
-
 ---
 
 ## 3. 評估
@@ -82,25 +79,38 @@ _待..._
 * MF: MaxFilter ( Single Level Pooling )
 * 3DMF: 3DMaxFilter ( Three Level Pooling ) 參考 5.1
 
+更改 evaluation.py 中切入點中的 model_weight_path 權重路徑即可。
+```python
+if __name__ == '__main__':
+    init_()
+    config.EVALUATION = 1
+    main(
+        model_weight_path='20220427-DPCB-HStd-SGDWE100BS2B1R50D4.h5'
+    )
+```
+
 ### 3.1 Deep PCB:
 * 訓練及評估影像大小: 640 * 640 ( PHI=1 )，就那個黑白的 PCB 瑕疵資料集
 * 在 50 epochs 下，原始 SAPD 訓練時間約為 1.9 小時; DWLM 約為 1.1小時，供參考(RTX 3060 6g)
+* 下表展示訓練結果，將原本需訓練的 FSN 優化為 DWLM 提升效果非常穩健。並搭配 MF 及 3DMF 效果也相當出色
 
 | subnetworks  | backbone | setting    | mAP    | AP.5   | AP.75  | AP.9   |
 |--------------|----------|------------|--------|--------|--------|--------|
-| SAPD - org   | R50      | 50 epochs  | 0.7530 | 0.9751 | 0.8881 | 0.3518 |
-| DWLM         | R50      | 50 epochs  | 0.7643 | 0.9866 | 0.9122 | 0.3881 |
-| DWLM w/ MF   | R50      | 50 epochs  | 0.7684 | 0.9886 | 0.9150 | 0.3803 |
-| DWLM w/ MF   | R50      | 100 epochs | 0.7853 | 0.9878 | 0.9440 | 0.4261 |
-| DWLM w/ 3DMF | R50      | 50 epochs  | -      | -      | -      | -      |
-| DWLM w/ 3DMF | R50      | 100 epochs | 0.7828 | 0.9853 | 0.9373 | 0.4115 |
-
-* PCB-Defects 資料集，本貢獻不使用，此資料集建立在人工瑕疵，模型訓練到後期會記住人工修改的特徵。
-
-### 3.2 VOC 2007 + 2012
+| SAPD - org   | R50      | 50 epoch   | 0.7530 | 0.9751 | 0.8881 | 0.3518 |
+| DWLM         | R50      | 50 epoch   | 0.7643 | 0.9866 | 0.9122 | 0.3881 |
+| DWLM w/ MF   | R50      | 50 epoch   | 0.7684 | 0.9886 | 0.9150 | 0.3803 |
+| DWLM w/ MF   | R50      | 100 epoch  | 0.7853 | 0.9878 | 0.9440 | 0.4261 |
+| DWLM w/ 3DMF | R50      | 100 epoch  | 0.7828 | 0.9853 | 0.9373 | 0.4115 |
 
 
-_待..._
+* 我將想法退回到 FCOS 的 centerness branch 上，搭配與分類子網路相乘的 3DMF 優化方法。
+* DWLM* 為取前三高權重作為soft-anchor，加上 centerness branch 與分類子網路兩者輸出sigmoid 再相乘之優化子網路。
+
+| subnetworks | backbone | setting    | mAP        | AP.5       | AP.75      | AP.9       |
+|-------------|----------|------------|------------|------------|------------|------------|
+| DWLM        | R50      | 50 epoch   | 0.7643     | **0.9866** | 0.9122     | 0.3881     |
+| DWLM*       | R50      | 50 epoch   | **0.8094** | 0.9838     | **0.9422** | **0.4710** |
+| DWLM*       | R50      | 100 epoch  | **0.8194** | 0.9849     | **0.9449** | **0.4981** |
 
 ---
 
