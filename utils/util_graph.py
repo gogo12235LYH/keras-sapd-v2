@@ -92,7 +92,7 @@ def create_reg_positive_sample(bboxes, x1, y1, x2, y2, stride):
     anchor_pots = tf.minimum(lef, rit) * tf.minimum(top, bot) / tf.maximum(lef, rit) / tf.maximum(top, bot)
     area = (lef + rit) * (top + bot)
 
-    return reg_target, anchor_pots, area
+    return reg_target, anchor_pots ** .5, area
 
 
 def trim_zero_padding_boxes(boxes):

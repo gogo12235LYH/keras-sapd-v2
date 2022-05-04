@@ -103,7 +103,10 @@ def create_generators():
 
 
 def create_optimizer(opt_name, base_lr, m, decay):
+    print(f"[INFO] Creating Optimizer... ", end='')
+
     if opt_name == 'SGD':
+        print(f"SGD(lr={config.BASE_LR}, m={config.MOMENTUM}, decay={config.DECAY}, nesterov={config.USE_NESTEROV})")
         return keras.optimizers.SGD(
             learning_rate=base_lr,
             momentum=m,
@@ -112,11 +115,13 @@ def create_optimizer(opt_name, base_lr, m, decay):
         )
 
     if opt_name == 'Adam':
+        print(f"Adam(lr={config.BASE_LR}")
         return keras.optimizers.Adam(
             learning_rate=base_lr
         )
 
     if opt_name == 'SGDW':
+        print(f"SGDW(lr={config.BASE_LR}, m={config.MOMENTUM}, weight_decay={config.DECAY}, nesterov={config.USE_NESTEROV})")
         return SGDW(
             learning_rate=base_lr,
             weight_decay=decay,
@@ -125,6 +130,7 @@ def create_optimizer(opt_name, base_lr, m, decay):
         )
 
     if opt_name == 'AdamW':
+        print(f"AdamW(lr={config.BASE_LR}, weight_decay={config.DECAY}")
         opt = AdamW(
             learning_rate=base_lr,
             weight_decay=decay
@@ -133,6 +139,7 @@ def create_optimizer(opt_name, base_lr, m, decay):
 
     if opt_name == 'SGD_GC':
         from optimizer import SGD_GC
+        print(f"SGD_GC(lr={config.BASE_LR}, m={config.MOMENTUM}, decay={config.DECAY}, nesterov={config.USE_NESTEROV})")
         return SGD_GC(
             learning_rate=base_lr,
             momentum=m,
@@ -142,40 +149,25 @@ def create_optimizer(opt_name, base_lr, m, decay):
 
     if opt_name == 'Adam_GC':
         from optimizer import Adam_GC
+        print(f"Adam_GC(lr={config.BASE_LR}")
         return Adam_GC(
             learning_rate=base_lr
-        )
-
-    if opt_name == 'SGDW_GC':
-        from optimizer import SGDW_GC
-        return SGDW_GC(
-            learning_rate=base_lr,
-            weight_decay=decay,
-            momentum=m,
-            nesterov=config.USE_NESTEROV
-        )
-
-    if opt_name == 'AdamW_GC':
-        from optimizer import AdamW_GC
-        return AdamW_GC(
-            learning_rate=base_lr,
-            weight_decay=decay
         )
 
     raise ValueError("[INFO] Got WRONG Optimizer name. PLZ CHECK again !!")
 
 
-def model_compile(info, optimizer):
-    print(f"{info} Creating Model... ")
+def model_compile(optimizer):
+    print(f"[INFO] Creating Model... ")
     model_, infer_ = detector(
         num_cls=config.NUM_CLS,
         depth=config.SUBNET_DEPTH,
     )
 
-    print(f"{info} Loading Weight... ", end='')
+    print(f"[INFO] Loading Weight... ", end='')
     load_weights(input_model=model_)
 
-    print(f"{info} Model Compiling... ")
+    print(f"[INFO] Model Compiling... ")
     model_.compile(optimizer=optimizer)
     return model_, infer_
 
@@ -189,10 +181,7 @@ def main():
         policy = mixed_precision.Policy('mixed_float16')
         mixed_precision.set_global_policy(policy)
 
-    stage = f"[INFO] "
-
     """ Optimizer Setup """
-    print(f"{stage} Creating Optimizer... ")
     Optimizer = create_optimizer(
         opt_name=config.OPTIMIZER,
         base_lr=config.BASE_LR,
@@ -200,7 +189,7 @@ def main():
         decay=config.DECAY
     )
 
-    print(f"{stage} Creating Generators... ")
+    print(f"[INFO] Creating Generators... ")
     train_generator, test_generator = create_generators()
 
     """ Multi GPU Accelerating"""
@@ -212,13 +201,13 @@ def main():
         mirrored_strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.HierarchicalCopyAllReduce())
 
         with mirrored_strategy.scope():
-            model, pred_model = model_compile(stage, Optimizer)
+            model, pred_model = model_compile(Optimizer)
     else:
-        model, pred_model = model_compile(stage, Optimizer)
+        model, pred_model = model_compile(Optimizer)
 
-    print(f"{stage} Model Name : {config.NAME}")
+    print(f"[INFO] Model Name : {config.NAME}")
 
-    print(f"{stage} Creating Callbacks... ", end='')
+    print(f"[INFO] Creating Callbacks... ", end='')
     callbacks = create_callbacks(
         config=config,
         pred_mod=pred_model,
@@ -227,7 +216,7 @@ def main():
 
     """ Training, the batch size of generator is global batch size. """
     """ Ex: If global batch size and GPUs are 32 and 4, it is 8 (32/4) images per GPU during training. """
-    print(f"{stage} Start Training... ")
+    print(f"[INFO] Start Training... ")
     model.fit(
         train_generator,
         epochs=config.EPOCHs,
@@ -237,7 +226,7 @@ def main():
 
     """ Save model's weights """
     save_model_name = config.NAME
-    print(f"{stage} Saving Model Weights : {save_model_name}.h5 ... ")
+    print(f"[INFO] Saving Model Weights : {save_model_name}.h5 ... ")
     model.save_weights(f'{save_model_name}.h5')
 
 

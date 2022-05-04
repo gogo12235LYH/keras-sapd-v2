@@ -96,6 +96,7 @@ def _findNode(parent, name, debug_name=None, parse=None):
 
 dataset = {
     'VOC': voc_classes,
+    'VOC_mini': voc_classes,
     'DPCB': deepPCB_classes,
     'rPCB': rand_crop_PCB_classes
 }

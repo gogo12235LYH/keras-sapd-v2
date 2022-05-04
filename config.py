@@ -57,7 +57,7 @@ MixUp_AUG = 0
 """ Backbone: Feature Extractor """
 BACKBONE_TYPE = 'ResNetV1'  # ResNetV1, SEResNet
 BACKBONE = 50           # 50 101
-FROZEN_BACKBONE_STAGE = False
+FROZEN_BACKBONE_STAGE = False    # similar with mask-rcnn benchmark, it is going to freeze stage one and two.
 FROZEN_BACKBONE_BN = False
 PRETRAIN = 1            # 0 for from scratch, 1 for Imagenet, 2 for the weight's path that you want to load in.
 PRETRAIN_WEIGHT = './xxxx.h5'

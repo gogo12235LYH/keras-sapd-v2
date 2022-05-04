@@ -126,7 +126,8 @@ class MaxPoolFilter(keras.layers.Layer):
         loc_outputs = []
 
         for i, loc_feature in enumerate(loc_features):
-            max_loc_3d = self.pool(loc_feature)
+            # max_loc_3d = self.pool(loc_feature)
+            max_loc_3d = loc_feature
             max_loc_3d += inputs[i]
             max_loc_3d = self.act(self.normal(max_loc_3d))
             max_loc_3d = self.conv2d_s(max_loc_3d)

@@ -459,7 +459,7 @@ def preprocess_data_v2(
 
 
 @tf.function
-def _compute_targets(image, bboxes, classes, fmap_shapes):
+def _compute_targets_v1(image, bboxes, classes, fmap_shapes):
     num_cls = config.NUM_CLS
 
     cls_target_ = tf.zeros((0, num_cls + 2), dtype=tf.float32)
@@ -526,16 +526,15 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
 
             return _cls_target, _loc_target, _area
 
-        # cls_target : shape = (anchor-points, fh, fw, cls_num + 2)
-        # reg_target : shape = (anchor-points, fh, fw, 4 + 2)
-        # area : shape = (anchor-points, fh, fw)
+        # cls_target : shape = (objects, fh, fw, cls_num + 2)
+        # reg_target : shape = (objects, fh, fw, 4 + 2)
+        # area : shape = (objects, fh, fw)
         level_cls_target, level_reg_target, level_area = tf.map_fn(
             build_map_function_target,
             elems=[pos_x1, pos_y1, pos_x2, pos_y2, bboxes, classes],
             fn_output_signature=(tf.float32, tf.float32, tf.float32),
         )
-
-        # min area : shape = (targets, fh, fw) --> (fh, fw)
+        # min area : shape = (objects, fh, fw) --> (fh, fw)
         level_min_area_indices = tf.argmin(level_area, axis=0, output_type=tf.int32)
         # (fh, fw) --> (fh * fw)
         level_min_area_indices = tf.reshape(level_min_area_indices, (-1,))
@@ -554,18 +553,129 @@ def _compute_targets(image, bboxes, classes, fmap_shapes):
         """ Select """
         level_cls_target = tf.gather_nd(level_cls_target, level_indices)
         level_reg_target = tf.gather_nd(level_reg_target, level_indices)
+        level_min_area_indices = tf.expand_dims(
+            tf.where(tf.equal(level_cls_target[..., -1], 1.), level_min_area_indices, -1),
+            axis=-1)
 
         cls_target_ = tf.concat([cls_target_, level_cls_target], axis=0)
         reg_target_ = tf.concat([reg_target_, level_reg_target], axis=0)
-        ind_target_ = tf.concat([ind_target_, tf.expand_dims(level_min_area_indices, -1)], axis=0)
+        ind_target_ = tf.concat([ind_target_, level_min_area_indices], axis=0)
+        # ind_target_ = tf.concat([ind_target_, tf.expand_dims(level_min_area_indices, -1)], axis=0)
 
-    ind_target_ = tf.where(
-        tf.equal(cls_target_[..., -1], 1.), ind_target_[..., 0], -1
-    )[..., None]
-
-    # Shape: (anchor-points, cls_num + 2) and (anchor-points, 4 + 2)
-    # return image, cls_target_, reg_target_
+    # ind_target_ = tf.where(tf.equal(cls_target_[..., -1], 1.), ind_target_[..., 0], -1)[..., None]
+    # Shape: (anchor-points, cls_num + 2), (anchor-points, 4 + 2)
     return image, cls_target_, reg_target_, ind_target_, tf.shape(bboxes)[0][..., None]
+
+
+@tf.function
+def _compute_targets_v2(image, bboxes, classes, fmap_shapes):
+    num_cls = config.NUM_CLS
+
+    cls_target_ = tf.zeros((0, num_cls + 2), dtype=tf.float32)
+    reg_target_ = tf.zeros((0, 4 + 2), dtype=tf.float32)
+    ind_target_ = tf.zeros((0, 1), dtype=tf.int32)
+    mk_target_ = tf.zeros((tf.shape(bboxes)[0], 0, 1), dtype=tf.float32)
+
+    classes = tf.cast(classes, tf.int32)
+
+    for level in range(len(_STRIDES)):
+        stride = _STRIDES[level]
+
+        fh = fmap_shapes[level][0]
+        fw = fmap_shapes[level][1]
+
+        pos_x1, pos_y1, pos_x2, pos_y2 = shrink_and_normalize_boxes(bboxes, fh, fw, stride, config.SHRINK_RATIO)
+
+        def build_map_function_target(args):
+            pos_x1_ = args[0]
+            pos_y1_ = args[1]
+            pos_x2_ = args[2]
+            pos_y2_ = args[3]
+            box = args[4]
+            cls = args[5]
+
+            """ Create Negative sample """
+            neg_top_bot = tf.stack((pos_y1_, fh - pos_y2_), axis=0)
+            neg_lef_rit = tf.stack((pos_x1_, fw - pos_x2_), axis=0)
+            neg_pad = tf.stack([neg_top_bot, neg_lef_rit], axis=0)
+
+            """ Regression Target: create positive sample """
+            _loc_target, _ap_weight, _area = create_reg_positive_sample(
+                box, pos_x1_, pos_y1_, pos_x2_, pos_y2_, stride
+            )
+
+            """ Classification Target: create positive sample """
+            _cls_target = tf.zeros((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, num_cls), dtype=tf.float32) + (
+                    _ALPHA / config.NUM_CLS)
+            _cls_onehot = tf.ones((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_, 1), dtype=tf.float32) * (1 - _ALPHA)
+            _cls_target = tf.concat((_cls_target[..., :cls], _cls_onehot, _cls_target[..., cls + 1:]), axis=-1)
+
+            """ Padding Classification Target's negative sample """
+            _cls_target = tf.pad(
+                _cls_target,
+                tf.concat((neg_pad, tf.constant([[0, 0]])), axis=0),
+            )
+
+            """ Padding Soft Anchor's negative sample """
+            _ap_weight = tf.pad(_ap_weight, neg_pad, constant_values=1)
+
+            """ Creating Positive Sample locations and padding it's negative sample """
+            _pos_mask = tf.ones((pos_y2_ - pos_y1_, pos_x2_ - pos_x1_))
+            _pos_mask = tf.pad(_pos_mask, neg_pad)
+
+            """ Padding Regression Target's negative sample """
+            _loc_target = tf.pad(_loc_target, tf.concat((neg_pad, tf.constant([[0, 0]])), axis=0))
+
+            """ Output Target """
+            # shape = (fh, fw, cls_num + 2)
+            _cls_target = tf.concat([_cls_target, _ap_weight[..., None], _pos_mask[..., None]], axis=-1)
+            # shape = (fh, fw, 4 + 2)
+            _loc_target = tf.concat([_loc_target, _ap_weight[..., None], _pos_mask[..., None]], axis=-1)
+            # (fh, fw)
+            _area = tf.pad(_area, neg_pad, constant_values=1e7)
+
+            return _cls_target, _loc_target, _area
+
+        # cls_target : shape = (objects, fh, fw, cls_num + 2)
+        # reg_target : shape = (objects, fh, fw, 4 + 2)
+        # area : shape = (objects, fh, fw)
+        level_cls_target, level_reg_target, level_area = tf.map_fn(
+            build_map_function_target,
+            elems=[pos_x1, pos_y1, pos_x2, pos_y2, bboxes, classes],
+            fn_output_signature=(tf.float32, tf.float32, tf.float32),
+        )
+        objects_mask = tf.reshape(level_cls_target[..., -1], (tf.shape(level_cls_target)[0], -1, 1))
+
+        # min area : shape = (objects, fh, fw) --> (fh, fw)
+        level_min_area_indices = tf.argmin(level_area, axis=0, output_type=tf.int32)
+        # (fh, fw) --> (fh * fw)
+        level_min_area_indices = tf.reshape(level_min_area_indices, (-1,))
+
+        # (fw, ), (fh, )
+        locs_x, locs_y = tf.range(0, fw), tf.range(0, fh)
+
+        # (fh, fw) --> (fh * fw)
+        locs_xx, locs_yy = tf.meshgrid(locs_x, locs_y)
+        locs_xx = tf.reshape(locs_xx, (-1,))
+        locs_yy = tf.reshape(locs_yy, (-1,))
+
+        # (fh * fw, 3)
+        level_indices = tf.stack((level_min_area_indices, locs_yy, locs_xx), axis=-1)
+
+        """ Select """
+        level_cls_target = tf.gather_nd(level_cls_target, level_indices)
+        level_reg_target = tf.gather_nd(level_reg_target, level_indices)
+        level_min_area_indices = tf.expand_dims(
+            tf.where(tf.equal(level_cls_target[..., -1], 1.), level_min_area_indices, -1),
+            axis=-1)
+
+        cls_target_ = tf.concat([cls_target_, level_cls_target], axis=0)
+        reg_target_ = tf.concat([reg_target_, level_reg_target], axis=0)
+        ind_target_ = tf.concat([ind_target_, level_min_area_indices], axis=0)
+        mk_target_ = tf.concat([mk_target_, objects_mask], axis=1)
+
+    # Shape: (anchor-points, cls_num + 2), (anchor-points, 4 + 2)
+    return image, cls_target_, reg_target_, ind_target_, tf.shape(bboxes)[0][..., None], mk_target_
 
 
 def inputs_targets_v1(image, bboxes, bboxes_count, fmaps_shape):
@@ -589,21 +699,56 @@ def inputs_targets_v2(image, cls_target, reg_target, ind_target, bboxes_cnt):
     return inputs
 
 
+def inputs_targets_v3(image, cls_target, reg_target, ind_target, bboxes_cnt, mask_target, ):
+    inputs = {
+        "image": image,
+        "cls_target": cls_target,
+        "loc_target": reg_target,
+        "ind_target": ind_target,
+        "bboxes_cnt": bboxes_cnt,
+        "mask_target": mask_target,
+    }
+    return inputs
+
+
+def _load_data_from_tfrecord(ds_name, path="D:/datasets/"):
+    if ds_name == "DPCB":
+        (train, test), ds_info = tfds.load(name="dpcb_db",
+                                           split=["train", "test"],
+                                           data_dir=path,
+                                           with_info=True)
+    elif ds_name == "VOC":
+        (train, test), ds_info = tfds.load(name="pascal_voc",
+                                           split=["train", "test"],
+                                           data_dir=path,
+                                           with_info=True,
+                                           shuffle_files=True)
+    elif ds_name == "VOC_mini":
+        (train, test), ds_info = tfds.load(name="pascal_voc_mini",
+                                           split=["train", "test"],
+                                           data_dir=path,
+                                           with_info=True,
+                                           shuffle_files=True)
+    else:
+        train, test, ds_info = None, None, None
+
+    return train, test, ds_info.splits["train"].num_examples, ds_info.splits["test"].num_examples
+
+
 def create_pipeline_v1(phi=0, mode="ResNetV1", db="DPCB", batch_size=1):
     autotune = tf.data.AUTOTUNE
 
-    if db == "DPCB":
-        (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="C:/works/datasets/")
-    else:
-        train = None
-        test = None
+    train, test, train_num, test_num = _load_data_from_tfrecord(db)
 
-    feature_maps_shapes = _fmap_shapes(phi)
+    # if db == "DPCB":
+    #     (train, test) = tfds.load(name="dpcb_db", split=["train", "test"], data_dir="C:/works/datasets/")
+    # else:
+    #     train = None
+    #     test = None
 
-    train = train.map(preprocess_data_v1(phi=phi, mode=mode, fmap_shapes=feature_maps_shapes),
+    train = train.map(preprocess_data_v1(phi=phi, mode=mode, fmap_shapes=_fmap_shapes(phi)),
                       num_parallel_calls=autotune)
-
-    train = train.shuffle(train.__len__())
+    train = train.shuffle(train_num)
     train = train.padded_batch(batch_size=batch_size, padding_values=(0.0, 0.0, 0, 0), drop_remainder=True)
     train = train.map(inputs_targets_v1, num_parallel_calls=autotune)
     train = train.repeat().prefetch(autotune)
@@ -639,10 +784,14 @@ def create_pipeline_v2(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=Fa
         debug=debug
     ), num_parallel_calls=autotune)
 
-    train = train.shuffle(_buffer, reshuffle_each_iteration=True).repeat()
-    train = train.map(_compute_targets, num_parallel_calls=autotune)  # already for padded tensor.
-    train = train.batch(batch_size=batch_size, drop_remainder=True)
-    train = train.map(inputs_targets_v2, num_parallel_calls=autotune)
+    train = (train.shuffle(_buffer, reshuffle_each_iteration=True).repeat())
+    train = train.map(_compute_targets_v2, num_parallel_calls=autotune)  # padded tensor.
+    # train = train.batch(batch_size=batch_size, drop_remainder=True)   # with _compute_targets_v1
+    train = train.padded_batch(
+        batch_size=batch_size,
+        padding_values=(0., 0., 0., 0, 0, 0.),
+        drop_remainder=True)  # with _compute_targets_v2
+    train = train.map(inputs_targets_v3, num_parallel_calls=autotune)
     train = train.prefetch(autotune)
 
     return train, test
@@ -680,7 +829,7 @@ def create_pipeline_test(phi=0, mode="ResNetV1", db="DPCB", batch_size=1, debug=
 
 if __name__ == '__main__':
     eps = 10
-    bs = 32
+    bs = 1
 
     train_t, test_t = create_pipeline_v2(
         phi=config.PHI,
@@ -690,28 +839,28 @@ if __name__ == '__main__':
     )
 
     """ """
-    for ep in range(eps):
-        for step, inputs_batch in enumerate(train_t):
-            # _cls = inputs_batch['cls_target'].numpy()
-            # _loc = inputs_batch['loc_target'].numpy()
-            # _ind = inputs_batch['ind_target'].numpy()
-            _int = inputs_batch['bboxes_cnt'].numpy()
-
-            print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {_int[:, 0]}")
-
-            if np.min(_int) == 0:
-                break
-
-            # if step > (16551 // bs) - 3:
-            #     min_cnt = np.min(_int)
-            #     print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {min_cnt}")
+    # for ep in range(eps):
+    #     for step, inputs_batch in enumerate(train_t):
+    #         # _cls = inputs_batch['cls_target'].numpy()
+    #         # _loc = inputs_batch['loc_target'].numpy()
+    #         # _ind = inputs_batch['ind_target'].numpy()
+    #         _int = inputs_batch['bboxes_cnt'].numpy()
+    #
+    #         print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {_int[:, 0]}")
+    #
+    #         if np.min(_int) == 0:
+    #             break
+    #
+    #         # if step > (16551 // bs) - 3:
+    #         #     min_cnt = np.min(_int)
+    #         #     print(f"Ep: {ep + 1}/{eps} - {step + 1}, Batch: {_int.shape[0]}, {min_cnt}")
 
     """ """
 
     # iterations = 1
     # for step, inputs_batch in enumerate(train_t):
-    #     if (step + 1) > iterations:
-    #         break
+    #     # if (step + 1) > iterations:
+    #     #     break
     #
     #     print(f"[INFO] {step + 1} / {iterations}")
     #
@@ -719,14 +868,27 @@ if __name__ == '__main__':
     #     _loc = inputs_batch['loc_target'].numpy()
     #     _ind = inputs_batch['ind_target'].numpy()
     #     _int = inputs_batch['bboxes_cnt'].numpy()
+    #     _mks = inputs_batch['mask_target'].numpy()
     #
-    # p7_cls = np.reshape(_cls[0, 8500:, -2], (5, 5))
-    # p6_cls = np.reshape(_cls[0, 8400:8500, -2], (10, 10))
-    # p5_cls = np.reshape(_cls[0, 8000:8400, -2], (20, 20))
+    #     if _int > 15:
+    #         break
     #
-    # p7_loc = np.reshape(_loc[0, 8500:, -2], (5, 5))
-    # p6_loc = np.reshape(_loc[0, 8400:8500, -2], (10, 10))
-    # p5_loc = np.reshape(_loc[0, 8000:8400, -2], (20, 20))
+    # obj_cnt = _int[0, 0]
+    # p7_mk = np.reshape(_cls[0, 8500:, -1], (5, 5))
+    # p6_mk = np.reshape(_cls[0, 8400:8500, -1], (10, 10))
+    # p5_mk = np.reshape(_cls[0, 8000:8400, -1], (20, 20))
+    #
+    # p7_mk_obj = np.reshape(_mks[0, :, 8500:, 0], (obj_cnt, 5, 5))
+    # p6_mk_obj = np.reshape(_mks[0, :, 8400:8500, 0], (obj_cnt, 10, 10))
+    # p5_mk_obj = np.reshape(_mks[0, :, 8000:8400, 0], (obj_cnt, 20, 20))
+    #
+    # p7_ap = np.reshape(_cls[0, 8500:, -2], (5, 5))
+    # p6_ap = np.reshape(_cls[0, 8400:8500, -2], (10, 10))
+    # p5_ap = np.reshape(_cls[0, 8000:8400, -2], (20, 20))
+    #
+    # p7_ind = np.reshape(_ind[0, 8500:], (5, 5))
+    # p6_ind = np.reshape(_ind[0, 8400:8500], (10, 10))
+    # p5_ind = np.reshape(_ind[0, 8000:8400], (20, 20))
 
     """ """
 

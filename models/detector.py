@@ -5,7 +5,7 @@ from utils.util_graph import trim_zero_padding_boxes, shrink_and_normalize_boxes
     create_reg_positive_sample
 from models.neck import FeaturePyramidNetwork
 from models.layers import Locations2, RegressionBoxes2, ClipBoxes2, FilterDetections2
-from models.losses import FocalLoss, IoULoss, DWLMLayer, CENLoss
+from models.losses import FocalLoss, IoULoss, DWLMLayer, CENLoss, FMAP_AREA_SUM
 
 STRIDES = (8, 16, 32, 64, 128)
 
@@ -252,19 +252,37 @@ def _build_head_subnets(input_features, width, depth, num_cls):
         return cls_pred, reg_pred
 
 
+class centerness_rebuild(keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super(centerness_rebuild, self).__init__(dtype=tf.float32, **kwargs)
+
+    def call(self, inputs, *args, **kwargs):
+        mask = inputs[0]
+        pred_cen = inputs[1]
+
+        out = tf.where(
+            tf.greater(mask, 0.),
+            pred_cen,
+            1.
+        )
+
+        return out[..., None]
+
+    def get_config(self):
+        cfg = super(centerness_rebuild, self).get_config()
+        return cfg
+
+
 def detector(
         num_cls=20,
         width=256,
         depth=4,
 ):
-    feature_maps_shape_input = None
-    gt_boxes_input = None
-    cls_tar, loc_tar, ind_tar, bboxes_cnt = None, None, None, None
-
     if config.DB_MODE == "keras":
         images = keras.layers.Input((None, None, 3), name='image')
         gt_boxes_input = keras.layers.Input((100, 5), name='bboxes')
         feature_maps_shape_input = keras.layers.Input((5, 2), dtype=tf.int32, name='fmaps_shape')
+        cls_tar, loc_tar, ind_tar, bboxes_cnt = Target_v1()([feature_maps_shape_input, gt_boxes_input])
         inputs = [images, gt_boxes_input, feature_maps_shape_input]
 
     else:
@@ -273,7 +291,8 @@ def detector(
         loc_tar = keras.layers.Input((None, 4 + 2), name='loc_target')
         ind_tar = keras.layers.Input((None, 1), name='ind_target')
         bboxes_cnt = keras.layers.Input((1,), name='bboxes_cnt')
-        inputs = [images, cls_tar, loc_tar, ind_tar, bboxes_cnt]
+        mask_tar = keras.layers.Input((None, FMAP_AREA_SUM, 1), name="mask_target")
+        inputs = [images, cls_tar, loc_tar, ind_tar, bboxes_cnt, mask_tar]
 
     """ Backbone """
     backbone = _build_backbone_v2(name='resnet', depth=50)
@@ -284,31 +303,29 @@ def detector(
     features = fpn([c3, c4, c5])
 
     """ Subnetworks """
-    # (None, 8525, num_cls), (None, 8525, 4)
+    # (None, 8525, num_cls), (None, 8525, 4), (None, 8525, 1)
     cls_out, loc_out, cen_out = _build_head_subnets(
         input_features=features,
         width=width,
         depth=depth,
         num_cls=num_cls
     )
-    """ Build Target """
-    if config.DB_MODE == "keras":
-        cls_tar, loc_tar, ind_tar, bboxes_cnt = Target_v1()([feature_maps_shape_input, gt_boxes_input])
 
     dwlm_out, dc_mask = DWLMLayer()(
         [
             cls_out, loc_out,
             cls_tar, loc_tar,
             ind_tar, bboxes_cnt,
+            mask_tar
         ]
     )
 
     """ Focal & IoU Loss """
     focal_loss = FocalLoss(test=True, name='cls_loss')(
-        [cls_tar, cls_out, dwlm_out]
+        [cls_tar, cls_out, dwlm_out, cen_out]
     )
     iou_loss = IoULoss(test=True, mode=config.IOU_LOSS, name='loc_loss')(
-        [loc_tar, loc_out, dwlm_out]
+        [loc_tar, loc_out, dwlm_out, cen_out]
     )
     cen_loss = CENLoss(name='cen_loss')(
         [cls_tar[..., -2], dc_mask, cen_out]

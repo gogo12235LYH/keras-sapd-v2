@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow.keras as keras
 from models.losses import compute_focal_v2, compute_iou_v2
 
-_IMG_SIZE = [512, 640]
+_IMG_SIZE = [512, 640, 768]
 
 _FMAP_AREA = np.power(
     [
@@ -17,7 +17,7 @@ _FMAP_AREA = np.power(
     2
 )
 
-_FMAP_AREA_SUM = np.sum(_FMAP_AREA)
+FMAP_AREA_SUM = np.sum(_FMAP_AREA)
 
 
 @tf.function
@@ -25,7 +25,7 @@ def _create_detections(fpn_level=5):
     detections = []
     for i in range(fpn_level):
         padding_fa_fnt = np.sum(_FMAP_AREA[:i])
-        padding_fa_bak = _FMAP_AREA_SUM - _FMAP_AREA[i] - padding_fa_fnt
+        padding_fa_bak = FMAP_AREA_SUM - _FMAP_AREA[i] - padding_fa_fnt
         detections.append(
             tf.pad(
                 tf.ones((_FMAP_AREA[i],)),
@@ -39,7 +39,7 @@ def _create_detections(fpn_level=5):
 
 
 @tf.function
-def _map_fn_dwlm(total_loss, mask, ind, bbox_cnt, top_k=3):
+def _map_fn_dwlm_v1(total_loss, ind, bbox_cnt):
     ind = tf.cast(ind, tf.int32)
     bbox_cnt = tf.cast(bbox_cnt, tf.int32)
 
@@ -47,14 +47,12 @@ def _map_fn_dwlm(total_loss, mask, ind, bbox_cnt, top_k=3):
 
     def _compute_target(args):
         # _batch_total_loss: (anchor-points, )
-        # _batch_mask: (anchor-points, )
         # _batch_ind: (anchor-points, )
         # _batch_bbox_cnt: (1, )
 
         _batch_loss = args[0]
-        _batch_mask = args[1]
-        _batch_ind = args[2]
-        _batch_bbox_cnt = args[3]
+        _batch_ind = args[1]
+        _batch_bbox_cnt = args[2]
 
         # (objects, ) -> (objects, 1)
         object_ids = tf.range(0, _batch_bbox_cnt, dtype=tf.int32)
@@ -79,7 +77,7 @@ def _map_fn_dwlm(total_loss, mask, ind, bbox_cnt, top_k=3):
             object_l_min = tf.reduce_min(object_l_mean)
 
             object_target = 1 - ((object_l_mean - object_l_min) / (object_l_max - object_l_min))
-
+            top_k = tf.minimum(3, _batch_bbox_cnt)
             min_weight = tf.nn.top_k(object_target, k=top_k)[0][..., -1]
 
             object_target = tf.where(
@@ -106,7 +104,82 @@ def _map_fn_dwlm(total_loss, mask, ind, bbox_cnt, top_k=3):
     # (batch, anchor-points)
     return tf.map_fn(
         _compute_target,
-        elems=[total_loss, mask, ind, bbox_cnt],
+        elems=[total_loss, ind, bbox_cnt],
+        fn_output_signature=tf.float32
+    )
+
+
+@tf.function
+def _map_fn_dwlm_v2(total_loss, obj_mask, ind, bbox_cnt, k=3):
+    ind = tf.cast(ind, tf.int32)
+    bbox_cnt = tf.cast(bbox_cnt, tf.int32)
+
+    # (fpn_level, anchor-points)
+    detections = _create_detections()  # level_onehot
+
+    def _compute_target(args):
+        # _batch_total_loss: (anchor-points, )
+        # _batch_obj_mask: (max_objects, anchor-points, )
+        # _batch_ind: (anchor-points, )
+        # _batch_bbox_cnt: (1, )
+
+        _batch_loss = args[0]
+        _batch_obj_mask = args[1]
+        _batch_ind = args[2]
+        _batch_bbox_cnt = args[3]
+
+        # (objects, ) -> (objects, 1)
+        object_ids = tf.range(0, _batch_bbox_cnt, dtype=tf.int32)
+        object_ids = tf.reshape(object_ids, [-1, 1])
+
+        def _build_target(arg):
+            object_id = arg
+
+            # (anchor-points, )
+            object_area_mask = tf.where(tf.equal(_batch_ind, object_id[0]), 1., 0.)
+            object_mask = tf.gather_nd(_batch_obj_mask, object_id[0])
+
+            # (anchor-points, ) * (5, anchor-points) ->　(5, anchor-points)
+            detections_area_mask = object_area_mask * detections
+            detections_mask = object_mask * detections
+
+            # (anchor-points, ) * (5, anchor-points) -> (5, anchor-points)
+            object_l = _batch_loss * detections_mask
+
+            # (5, ) -> Min-Max Normalization
+            object_l_mean = tf.reduce_sum(object_l, axis=1) / tf.maximum(1., tf.reduce_sum(detections_mask, axis=1))
+            object_l_max = tf.reduce_max(object_l_mean)
+            object_l_min = tf.reduce_min(object_l_mean)
+            object_target = 1 - ((object_l_mean - object_l_min) / (object_l_max - object_l_min))
+
+            top_k = k
+            # top_k = tf.minimum(k, _batch_bbox_cnt)
+            # top_k = tf.where(tf.greater(_batch_bbox_cnt, k), k, 3)
+            min_weight = tf.nn.top_k(object_target, k=top_k)[0][..., -1]
+
+            object_target = tf.where(tf.greater_equal(object_target, min_weight), object_target, 0.)
+            object_target = tf.expand_dims(object_target, axis=-1)
+
+            # (5, 1) * (5, anchor-points) reduce(axis=0) -> (anchor-points, )
+            object_target = tf.reduce_sum((object_target * detections_area_mask), axis=0)
+            return object_target
+
+        # (objects, anchor-points)
+        object_targets = tf.map_fn(
+            _build_target,
+            elems=[object_ids],
+            fn_output_signature=tf.float32
+        )
+
+        # (objects, anchor-points) -> (anchor-points, )
+        object_targets = tf.reduce_sum(object_targets, axis=0)
+
+        return object_targets
+
+    # (batch, anchor-points)
+    return tf.map_fn(
+        _compute_target,
+        elems=[total_loss, obj_mask, ind, bbox_cnt],
         fn_output_signature=tf.float32
     )
 
@@ -185,7 +258,7 @@ class DWLMLayer(keras.layers.Layer):
         super(DWLMLayer, self).__init__(dtype='float32', name=name, **kwargs)
 
         self.cls_loss_fn = compute_focal_v2(alpha=.25, gamma=2.)
-        self.loc_loss_fn = compute_iou_v2(mode='giou')
+        self.loc_loss_fn = compute_iou_v2(mode=config.IOU_LOSS)
 
     def call(self, inputs, *args, **kwargs):
         # (batch, anchor-points, classes); (batch, anchor-points, 4)
@@ -197,11 +270,15 @@ class DWLMLayer(keras.layers.Layer):
         # (batch, anchor-points, ); (batch, )
         ind_tar, bboxes_cnt = inputs[4][..., 0], inputs[5][..., 0]
 
+        # (batch, max_objects, anchor-points, 1) -> (batch, max_objects, anchor-points, )
+        obj_mask_tar = inputs[6][..., 0]
+
         # (None, 8525, )
         cls_loss = self.cls_loss_fn(cls_tar[..., :-2], cls_pred)
         loc_loss = self.loc_loss_fn(loc_tar, loc_pred)
 
-        dwlm_out = _map_fn_dwlm(cls_loss + loc_loss, cls_tar[..., -1], ind_tar, bboxes_cnt)
+        # dwlm_out = _map_fn_dwlm_v1(cls_loss + loc_loss, ind_tar, bboxes_cnt)
+        dwlm_out = _map_fn_dwlm_v2(cls_loss + loc_loss, obj_mask_tar, ind_tar, bboxes_cnt)
         # test_tar = _test_bench((cls_loss + loc_loss), cls_tar[..., -1], ind_tar, bboxes_cnt)
         # test_tar = _test_bench_v2(loc_loss, cls_tar[..., -2], cls_tar[..., -1], ind_tar, bboxes_cnt)
 
