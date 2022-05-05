@@ -9,12 +9,15 @@
 
 ---
 
+![image](https://github.com/gogo12235LYH/keras-sapd-v2/images/v2.png)
+
 ## Updates
 
 1. 2022-04-06 -> First Commit.
 2. 2022-04-09 -> DWLM w/ MF on 100 eps.
 3. 2022-04-11 -> Fixed NaN ( tf.reduced_sum 問題 )
 4. 2022-04-28 -> 修正 keras sequence generator (現在可使用 tf.data 或 keras.sequence 囉)
+
 ## ToDo
 
 1. ~~Keras Sequence generator~~
