@@ -9,7 +9,7 @@
 
 ---
 
-![image](https://github.com/gogo12235LYH/keras-sapd-v2/images/v2.png)
+![image](https://github.com/gogo12235LYH/keras-sapd-v2/blob/main/images/v2.png)
 
 ## Updates
 
